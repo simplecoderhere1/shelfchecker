@@ -801,6 +801,18 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
 
     // ── Ordering logic ────────────────────────────────────
 
+    // Normalize an author field to just the surname, lowercased, letters-only.
+    // Handles "Cara Black", "Black, Cara", "BLACK", "Black Benjamin" → "black".
+    function normalizeAuthor(s) {
+      if (!s) return null;
+      let v = String(s).toLowerCase().trim();
+      if (v.includes(',')) v = v.split(',')[0].trim();   // "Last, First" → "Last"
+      const parts = v.split(/\s+/).filter(Boolean);
+      if (parts.length > 1) v = parts[parts.length - 1]; // "Cara Black" → "Black"
+      v = v.replace(/[^a-z]/g, '');
+      return v || null;
+    }
+
     // Parse a Dewey/cutter label like "973.7 HAR" or "KIN"
     function parseDewey(s) {
       if (!s) return null;
@@ -821,8 +833,8 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
       if (section === 'fiction') {
         if (book.spine_label) return { kind: 'str', val: book.spine_label.toLowerCase() };
         if (lowConfNoLabel) return null;
-        if (book.author_last) return { kind: 'str', val: book.author_last.toLowerCase() };
-        return null;
+        const n = normalizeAuthor(book.author_last);
+        return n ? { kind: 'str', val: n } : null;
       }
 
       if (section === 'nonfiction') {
@@ -842,8 +854,8 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
         if (d) return { kind: 'dewey', val: d };
       }
       if (lowConfNoLabel) return null;
-      if (book.author_last) return { kind: 'str', val: book.author_last.toLowerCase() };
-      return null;
+      const n = normalizeAuthor(book.author_last);
+      return n ? { kind: 'str', val: n } : null;
     }
 
     // Compare two sort keys. Returns <0, 0, >0.
@@ -986,7 +998,7 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
         r = s + 1;
       }
 
-      return books.map((book, i) => {
+      const checked = books.map((book, i) => {
         // Shelf-relative position is i+1
         const shelfPos = i + 1;
         if (keys[i] === null) {
@@ -1012,6 +1024,27 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
           tiedGroupSlots: tied,
         };
       });
+
+      // Sandwich rule: a red book surrounded by greens whose keys MATCH EACH OTHER is
+      // almost certainly an OCR misread, not a real misplacement. Demote to unverifiable.
+      // Look at the nearest non-red neighbor on each side.
+      for (let i = 0; i < checked.length; i++) {
+        if (!checked[i].outOfOrder) continue;
+        let L = i - 1;
+        while (L >= 0 && checked[L].outOfOrder) L--;
+        let R = i + 1;
+        while (R < checked.length && checked[R].outOfOrder) R++;
+        if (L < 0 || R >= checked.length) continue;
+        const kL = keys[L], kR = keys[R];
+        if (!kL || !kR) continue;
+        if (compareKeys(kL, kR) === 0) {
+          checked[i].outOfOrder    = false;
+          checked[i].unverifiable  = true;
+          checked[i].idealPosition = null;
+        }
+      }
+
+      return checked;
     }
 
     // Public entry: group by shelf, clip boxes per shelf, run order check per shelf,
@@ -1078,12 +1111,16 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
           fontMult = 1;
           pillMult = 1.8;
         } else {
-          label = String(book.position);
+          // Always use shelf-relative position so numbers stay consistent across
+          // colors (the green/red/yellow boxes all read 1, 2, 3… within a shelf).
+          // Global reading-order position is still available in the tap popup.
+          label = String(shelfPos ?? book.position);
           fontMult = 1;
           pillMult = 1.8;
         }
 
-        const baseFont = Math.max(18, W / 55);
+        // ~25% larger pill font than before for at-a-glance readability
+        const baseFont = Math.max(22, W / 44);
         const fontSize = baseFont * fontMult;
         const pillW    = baseFont * pillMult;
         const pillH    = baseFont * 1.4;
