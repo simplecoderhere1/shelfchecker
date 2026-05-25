@@ -799,6 +799,14 @@
     // ── Gemini API ────────────────────────────────────────
     const GEMINI_URL = 'https://selfcheck-proxy.krish-sundareswar.workers.dev/';
 
+    // Try best model first; fall back automatically on quota / availability errors.
+    // The Worker reads the `model` field and substitutes it into the Gemini API URL.
+    const GEMINI_MODELS = [
+      'gemini-2.5-pro',        // best vision + reasoning
+      'gemini-2.5-flash',      // fast, very capable
+      'gemini-2.5-flash-lite', // cheapest, most available
+    ];
+
     function getSection() {
       return document.querySelector('.tab-btn.active').dataset.section;
     }
@@ -937,35 +945,69 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
 
       const imageData = getResizedImageData();
       const section   = getSection();
+      const prompt    = buildPrompt(section);
       let success = false;
 
       try {
-        const res = await fetch(GEMINI_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              parts: [
-                { text: buildPrompt(section) },
-                { inline_data: { mime_type: 'image/jpeg', data: imageData } }
-              ]
-            }]
-          })
-        });
+        let lastErr = null;
 
-        if (!res.ok) {
-          const errText = await res.text();
-          console.error('Gemini error:', errText);
-          throw new Error(`API error ${res.status}: ${errText.slice(0, 200)}`);
+        for (let i = 0; i < GEMINI_MODELS.length; i++) {
+          const model = GEMINI_MODELS[i];
+          const loadText = document.querySelector('.loading-text');
+          if (loadText) {
+            loadText.textContent = i === 0
+              ? 'READING SPINES…'
+              : `RETRYING WITH ${model.split('-').slice(1).join('-').toUpperCase()}…`;
+          }
+
+          let res;
+          try {
+            res = await fetch(GEMINI_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                model,
+                contents: [{
+                  parts: [
+                    { text: prompt },
+                    { inline_data: { mime_type: 'image/jpeg', data: imageData } }
+                  ]
+                }]
+              })
+            });
+          } catch (networkErr) {
+            lastErr = networkErr;
+            continue;   // network failure → try next model
+          }
+
+          // Quota / availability errors → try next model
+          if (res.status === 429 || res.status === 503 || res.status >= 500) {
+            const errText = await res.text().catch(() => '');
+            console.warn(`${model} returned ${res.status}, falling back…`, errText.slice(0, 200));
+            lastErr = new Error(`${model}: ${res.status}`);
+            continue;
+          }
+
+          if (!res.ok) {
+            const errText = await res.text();
+            console.error('Gemini error:', errText);
+            throw new Error(`API error ${res.status}: ${errText.slice(0, 200)}`);
+          }
+
+          // Success — parse the response
+          const json    = await res.json();
+          const raw     = json.candidates[0].content.parts[0].text;
+          const cleaned = raw.replace(/```json|```/g, '').trim();
+          const books   = JSON.parse(cleaned);
+
+          console.log(`Analysis succeeded with model: ${model}`);
+          success = true;
+          showResults(books, section);
+          return;   // done — exit the function
         }
 
-        const json    = await res.json();
-        const raw     = json.candidates[0].content.parts[0].text;
-        const cleaned = raw.replace(/```json|```/g, '').trim();
-        const books   = JSON.parse(cleaned);
-
-        success = true;
-        showResults(books, section);
+        // All models exhausted
+        throw lastErr || new Error('All models unavailable');
       } catch (err) {
         alert('Something went wrong: ' + err.message);
         analyzeBtn.disabled    = false;
