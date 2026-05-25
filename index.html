@@ -701,8 +701,8 @@
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: 'environment' },
-            width:  { ideal: 1920 },
-            height: { ideal: 1080 },
+            width:  { ideal: 3840 },
+            height: { ideal: 2160 },
           },
           audio: false,
         });
@@ -862,6 +862,12 @@ For each spine, return:
 - confidence: "high" | "medium" | "low" based on how clearly you can read the spine
 - bounding_box: [ymin, xmin, ymax, xmax] in normalized 0-1000 coordinates (0,0 = top-left)
 
+READING TIPS for accuracy:
+- Start with the white library sticker at the BOTTOM of each spine — it is pre-printed and is the most reliable text. Read it line by line: top line is usually SURNAME in all caps, second line is first name, third line (if present) is series name, fourth line is volume number.
+- If a spine is hard to read, use its NEIGHBORS as context: books on a library shelf are roughly alphabetical by author surname. If the spines around a book all say "BLACK", the hard-to-read one is very likely "BLACK" too.
+- Spine text is often rotated 90 degrees. Read carefully — do not confuse letters like "d/p", "b/q", "m/w" that look alike when rotated.
+- Return null for any field you cannot read clearly. Do NOT guess — a wrong value is worse than null.
+
 CRITICAL bounding box rules:
 - Each box must hug ONLY ONE spine — tight to its left, right, top, and bottom edges
 - Do NOT include the shelf, the gap between books, or adjacent spines
@@ -870,6 +876,11 @@ CRITICAL bounding box rules:
 - xmin and xmax should hug ONLY the spine's own width — not its neighbor
 - A box must NEVER cross from one shelf into another. If a spine is on the TOP shelf, its ymax must stop at the visible shelf surface below it — do NOT continue into the next shelf.
 - Before returning each box, verify: "does this rectangle contain exactly one spine and nothing else?"
+
+SELF-CHECK before returning:
+1. Count the physical spines you can see in the image. Does your array length match?
+2. For any entry with confidence "low", re-examine that spine one more time — can you improve the reading?
+3. Verify that author_last and spine_label are consistent: the surname in the label should match author_last.
 
 ${sectionInstruction}
 Return ONLY valid JSON. Use null for unreadable fields — never guess.
@@ -916,7 +927,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
     // Resize snapshot to max 1920px on long side, JPEG quality 0.82, then enhance.
     // Higher resolution gives Gemini more detail per spine, especially important
     // when photographing a full column of multiple shelves at once.
-    function getResizedImageData(maxDim = 1920, quality = 0.82) {
+    function getResizedImageData(maxDim = 1920, quality = 0.92) {
       const W = snapshot.width;
       const H = snapshot.height;
       const scale = Math.min(1, maxDim / Math.max(W, H));
@@ -1002,6 +1013,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 model,
+                generationConfig: { temperature: 0 },
                 contents: [{
                   parts: [
                     { text: prompt },
@@ -1381,9 +1393,12 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
         };
       });
 
-      // Sandwich rule: a red book surrounded by greens whose keys MATCH EACH OTHER is
-      // almost certainly an OCR misread, not a real misplacement. Demote to unverifiable.
-      // Look at the nearest non-red neighbor on each side.
+      // Sandwich rule: a red book surrounded by greens whose keys MATCH or are CLOSE
+      // is almost certainly an OCR misread, not a real misplacement.
+      // Rule 1: Exact match — nearest non-red neighbors have IDENTICAL keys.
+      // Rule 2: Outlier — both neighbors' primary value (surname / dewey) are within
+      //         1 letter of each other but the flagged book's primary value is far away.
+      //         "far" = the first letter differs by ≥3 positions in the alphabet.
       for (let i = 0; i < checked.length; i++) {
         if (!checked[i].outOfOrder) continue;
         let L = i - 1;
@@ -1391,9 +1406,32 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
         let R = i + 1;
         while (R < checked.length && checked[R].outOfOrder) R++;
         if (L < 0 || R >= checked.length) continue;
-        const kL = keys[L], kR = keys[R];
-        if (!kL || !kR) continue;
+        const kL = keys[L], kR = keys[R], kM = keys[i];
+        if (!kL || !kR || !kM) continue;
+
+        let demote = false;
+
+        // Rule 1: exact match between neighbors
         if (compareKeys(kL, kR) === 0) {
+          demote = true;
+        }
+
+        // Rule 2: neighbors close to each other, flagged book far from both
+        if (!demote && kL.kind === kR.kind && kM.kind === kL.kind) {
+          const valL = kL.kind === 'str' ? kL.val : String(kL.val.num ?? '');
+          const valR = kR.kind === 'str' ? kR.val : String(kR.val.num ?? '');
+          const valM = kM.kind === 'str' ? kM.val : String(kM.val.num ?? '');
+          if (valL && valR && valM) {
+            const neighborsClose = valL.charAt(0) === valR.charAt(0);
+            const farFromL = Math.abs(valM.charCodeAt(0) - valL.charCodeAt(0)) >= 3;
+            const farFromR = Math.abs(valM.charCodeAt(0) - valR.charCodeAt(0)) >= 3;
+            if (neighborsClose && farFromL && farFromR) {
+              demote = true;
+            }
+          }
+        }
+
+        if (demote) {
           checked[i].outOfOrder    = false;
           checked[i].unverifiable  = true;
           checked[i].idealPosition = null;
