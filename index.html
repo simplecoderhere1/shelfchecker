@@ -622,11 +622,21 @@
     // ── Retake ────────────────────────────────────────────
     function retake() {
       snapshot.style.display   = 'none';
+      video.style.display      = '';
       guide.style.display      = '';
       captureBtn.style.display = '';
+      captureBtn.disabled      = false;
       actionBtns.classList.remove('show');
       analyzeBtn.disabled      = true;
       analyzeBtn.textContent   = 'Analyze';
+
+      // On mobile, the camera track often ends or pauses during the analysis
+      // round-trip. Resume if we can; restart the stream entirely if not.
+      if (videoTrack && videoTrack.readyState === 'ended') {
+        startCamera();
+      } else if (video.paused) {
+        video.play().catch(() => startCamera());
+      }
     }
 
     captureBtn.addEventListener('click', capture);
