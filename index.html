@@ -296,11 +296,122 @@
       color: #fff;
     }
 
+    /* ── Step-through UI ────────────────────────────────── */
+    .step-arrow {
+      position: absolute;
+      z-index: 22;
+      pointer-events: none;
+      transform: translate(-50%, -100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: left 0.28s ease, top 0.28s ease;
+      filter: drop-shadow(0 3px 8px rgba(0,0,0,0.5));
+    }
+    .step-arrow-num {
+      background: #ef4444;
+      color: #fff;
+      font-weight: 800;
+      font-size: 17px;
+      padding: 6px 14px;
+      border-radius: 18px;
+      min-width: 28px;
+      text-align: center;
+      letter-spacing: 0.02em;
+    }
+    .step-arrow-tip {
+      width: 0;
+      height: 0;
+      border-left: 11px solid transparent;
+      border-right: 11px solid transparent;
+      border-top: 16px solid #ef4444;
+      margin-top: -1px;
+    }
+    .step-arrow.step-arrow-unv .step-arrow-num {
+      background: #facc15;
+      color: #1a1a1a;
+    }
+    .step-arrow.step-arrow-unv .step-arrow-tip {
+      border-top-color: #facc15;
+    }
+
+    .step-card {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 22;
+      background: rgba(20, 20, 20, 0.97);
+      backdrop-filter: blur(8px);
+      border-top: 1px solid #2c2c2c;
+      padding: 14px 16px;
+      padding-bottom: max(14px, env(safe-area-inset-bottom));
+      color: #eee;
+    }
+    .step-card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11.5px;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: #888;
+    }
+    .step-summary { color: #f87171; }
+    .step-counter { color: #888; font-variant-numeric: tabular-nums; }
+    .step-title {
+      font-size: 17px;
+      font-weight: 700;
+      margin-top: 4px;
+      color: #fff;
+      line-height: 1.25;
+    }
+    .step-meta {
+      font-size: 13px;
+      color: #aaa;
+      margin-top: 2px;
+    }
+    .step-action {
+      margin-top: 10px;
+      padding: 11px 12px;
+      background: #1e3a8a;
+      color: #dbeafe;
+      border-radius: 8px;
+      font-size: 13.5px;
+      line-height: 1.4;
+      text-align: center;
+    }
+    .step-action b { color: #fff; }
+    .step-nav {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .step-btn {
+      flex: 1;
+      padding: 11px 0;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      border: 1px solid #333;
+      background: #2c2c2c;
+      color: #ddd;
+      cursor: pointer;
+      transition: transform 0.1s ease;
+    }
+    .step-btn:active { transform: scale(0.97); }
+    .step-btn-primary {
+      background: #2563eb;
+      border-color: #2563eb;
+      color: #fff;
+      flex: 1.2;
+    }
+
     /* Tap-to-inspect popup */
     .book-inspect {
       position: absolute;
       left: 50%;
-      bottom: 80px;
+      top: 70px;
       transform: translateX(-50%);
       z-index: 30;
       width: min(86%, 320px);
@@ -1188,111 +1299,157 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       return [...checkedShelves, ...checkedUngrouped];
     }
 
-    // ── Results: draw boxes on photo + overlay summary ────
+    // ── Results: step-through mode (one issue at a time) ─────
     let lastCheckedBooks = [];
+    let stepIssues = [];
+    let stepCursor = 0;
 
     function showResults(books, section) {
-      const checked  = checkOrder(books, section);
+      const checked = checkOrder(books, section);
       lastCheckedBooks = checked;
+
+      // Clean up any prior result UI before rendering new state
+      document.getElementById('resultsOverlay')?.remove();
+      document.getElementById('stepThrough')?.remove();
+
+      // Issues = books that need attention AND have a bounding_box so we can point at them.
+      // Out-of-order first, then unverifiable.
+      stepIssues = checked
+        .filter(b => b.bounding_box && (b.outOfOrder || b.unverifiable))
+        .sort((a, b) => {
+          if (a.outOfOrder !== b.outOfOrder) return a.outOfOrder ? -1 : 1;
+          return (a.shelfPosition ?? 0) - (b.shelfPosition ?? 0);
+        });
+
       const outCount = checked.filter(b => b.outOfOrder).length;
       const unvCount = checked.filter(b => b.unverifiable).length;
 
-      const ctx = snapshot.getContext('2d');
-      const W   = snapshot.width;
-      const H   = snapshot.height;
+      actionBtns.classList.remove('show');
+      enableInspect();
 
-      checked.forEach(book => {
-        if (!book.bounding_box) return;
-        // Only highlight books that need attention. In-order books get no box at
-        // all so the photo stays readable; tap anywhere on a spine to inspect.
-        if (!book.outOfOrder && !book.unverifiable) return;
-
-        const [ymin, xmin, ymax, xmax] = book.bounding_box;
-        const x = (xmin / 1000) * W;
-        const y = (ymin / 1000) * H;
-        const w = ((xmax - xmin) / 1000) * W;
-        const h = ((ymax - ymin) / 1000) * H;
-
-        // Two-state color: red = out of order, yellow = unverifiable
-        const color = book.outOfOrder ? '#ef4444' : '#facc15';
-
-        ctx.strokeStyle = color;
-        ctx.lineWidth   = Math.max(3, W / 250);
-        ctx.strokeRect(x, y, w, h);
-
-        // Decide pill label.
-        // - Green/in-order: show display position
-        // - Yellow/unverifiable: show "?"
-        // - Red/out-of-order: show "shelfPos→ideal" only when the move is meaningful
-        //   (ideal differs from current AND the book is not within its tied slot range).
-        let label, fontMult, pillMult;
-        const shelfPos = book.shelfPosition;
-        const ideal    = book.idealPosition;
-        const inTied   = book.tiedGroupSlots && shelfPos >= book.tiedGroupSlots[0] && shelfPos <= book.tiedGroupSlots[1];
-        const showArrow = book.outOfOrder && ideal != null && shelfPos != null && ideal !== shelfPos && !inTied;
-
-        if (showArrow) {
-          label    = `${shelfPos}→${ideal}`;
-          fontMult = 0.85;
-          pillMult = 3.2;
-        } else if (book.unverifiable) {
-          label = '?';
-          fontMult = 1;
-          pillMult = 1.8;
-        } else {
-          // Always use shelf-relative position so numbers stay consistent across
-          // colors (the green/red/yellow boxes all read 1, 2, 3… within a shelf).
-          // Global reading-order position is still available in the tap popup.
-          label = String(shelfPos ?? book.position);
-          fontMult = 1;
-          pillMult = 1.8;
-        }
-
-        // ~25% larger pill font than before for at-a-glance readability
-        const baseFont = Math.max(22, W / 44);
-        const fontSize = baseFont * fontMult;
-        const pillW    = baseFont * pillMult;
-        const pillH    = baseFont * 1.4;
-
-        ctx.fillStyle  = color;
-        ctx.beginPath();
-        ctx.roundRect(x, y - pillH, pillW, pillH, 4);
-        ctx.fill();
-
-        ctx.fillStyle = book.unverifiable ? '#000' : '#fff';
-        ctx.font      = `bold ${fontSize}px sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(label, x + pillW / 2, y - pillH / 2);
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'alphabetic';
-      });
-
-      let badgeClass, badgeText;
-      if (outCount > 0) {
-        badgeClass = 'badge-warn';
-        badgeText  = `⚠ ${outCount} to move`;
-      } else if (unvCount > 0) {
-        badgeClass = 'badge-unverifiable';
-        badgeText  = `⚠ ${unvCount} unverifiable`;
+      if (stepIssues.length === 0) {
+        showSimpleBadge(outCount, unvCount);
       } else {
-        badgeClass = 'badge-ok';
-        badgeText  = '✓ All in order';
+        stepCursor = 0;
+        showStepThrough(outCount, unvCount);
       }
+    }
+
+    function showSimpleBadge(outCount, unvCount) {
+      let badgeClass, badgeText;
+      if (outCount > 0)       { badgeClass = 'badge-warn';         badgeText = `⚠ ${outCount} to move`; }
+      else if (unvCount > 0)  { badgeClass = 'badge-unverifiable'; badgeText = `⚠ ${unvCount} unverifiable`; }
+      else                    { badgeClass = 'badge-ok';           badgeText = '✓ All in order'; }
 
       const overlay = document.createElement('div');
       overlay.id        = 'resultsOverlay';
       overlay.className = 'results-overlay';
       overlay.innerHTML = `
-        <div class="overlay-badge ${badgeClass}">
-          ${badgeText}
-        </div>
+        <div class="overlay-badge ${badgeClass}">${badgeText}</div>
         <button class="btn-new-scan" onclick="newScan()">New Scan</button>`;
       cameraWrap.appendChild(overlay);
-
-      actionBtns.classList.remove('show');
-      enableInspect();
     }
+
+    function showStepThrough(outCount, unvCount) {
+      const container = document.createElement('div');
+      container.id = 'stepThrough';
+      const summary = outCount > 0
+        ? `${outCount} to move${unvCount ? ` · ${unvCount} unverifiable` : ''}`
+        : `${unvCount} unverifiable`;
+      container.innerHTML = `
+        <div class="step-arrow" id="stepArrow">
+          <div class="step-arrow-num" id="stepArrowNum">1</div>
+          <div class="step-arrow-tip"></div>
+        </div>
+        <div class="step-card" id="stepCard">
+          <div class="step-card-top">
+            <span class="step-summary">${summary}</span>
+            <span class="step-counter" id="stepCounter"></span>
+          </div>
+          <div class="step-title" id="stepTitle">—</div>
+          <div class="step-meta" id="stepMeta">—</div>
+          <div class="step-action" id="stepAction">—</div>
+          <div class="step-nav">
+            <button class="step-btn" id="stepPrev">← Prev</button>
+            <button class="step-btn step-btn-primary" id="stepNewScan">New Scan</button>
+            <button class="step-btn" id="stepNext">Next →</button>
+          </div>
+        </div>`;
+      cameraWrap.appendChild(container);
+
+      document.getElementById('stepPrev').onclick = () => {
+        stepCursor = (stepCursor - 1 + stepIssues.length) % stepIssues.length;
+        renderStep();
+      };
+      document.getElementById('stepNext').onclick = () => {
+        stepCursor = (stepCursor + 1) % stepIssues.length;
+        renderStep();
+      };
+      document.getElementById('stepNewScan').onclick = newScan;
+
+      renderStep();
+    }
+
+    function renderStep() {
+      const book = stepIssues[stepCursor];
+      if (!book) return;
+
+      // Position the arrow at this book's X-center, just above its top edge.
+      const arrow = document.getElementById('stepArrow');
+      if (arrow && book.bounding_box) {
+        const [ymin, , , xmax] = book.bounding_box;
+        const xmin = book.bounding_box[1];
+        const cw = snapshot.width, ch = snapshot.height;
+        const rect = snapshot.getBoundingClientRect();
+        const wrapRect = cameraWrap.getBoundingClientRect();
+        const dispScale = Math.min(rect.width / cw, rect.height / ch);
+        const dispW = cw * dispScale, dispH = ch * dispScale;
+        const offX = (rect.width - dispW) / 2 + (rect.left - wrapRect.left);
+        const offY = (rect.height - dispH) / 2 + (rect.top - wrapRect.top);
+        const bookCenterX = ((xmin + xmax) / 2 / 1000) * cw;
+        const bookTopY    = (ymin / 1000) * ch;
+        arrow.style.left = `${offX + bookCenterX * dispScale}px`;
+        // Anchor the arrow just above the book; transform pulls it up by its own height
+        arrow.style.top  = `${Math.max(8, offY + bookTopY * dispScale - 6)}px`;
+        arrow.classList.toggle('step-arrow-warn', !!book.outOfOrder);
+        arrow.classList.toggle('step-arrow-unv',  !!book.unverifiable && !book.outOfOrder);
+      }
+
+      document.getElementById('stepArrowNum').textContent = String(book.shelfPosition ?? book.position ?? '?');
+      document.getElementById('stepCounter').textContent = `Issue ${stepCursor + 1} of ${stepIssues.length}`;
+      document.getElementById('stepTitle').textContent   = book.title || '(unreadable title)';
+
+      const metaParts = [];
+      if (book.author_last)       metaParts.push(book.author_last);
+      if (book.spine_label)       metaParts.push(book.spine_label);
+      if (book.series_volume != null) metaParts.push(`#${book.series_volume}`);
+      document.getElementById('stepMeta').textContent = metaParts.join(' · ') || '—';
+
+      const actionEl = document.getElementById('stepAction');
+      if (book.unverifiable && !book.outOfOrder) {
+        actionEl.textContent = "Couldn't read this spine clearly — verify visually.";
+        actionEl.style.background = '#713f12';
+        actionEl.style.color      = '#fde047';
+      } else if (book.outOfOrder && book.idealPosition && book.shelfPosition) {
+        const dest = lastCheckedBooks.find(
+          b => b.shelfSize === book.shelfSize && b.shelfPosition === book.idealPosition
+        );
+        const destName = dest
+          ? (dest.title || dest.spine_label || (dest.author_last ? `${dest.author_last}'s book` : `position ${book.idealPosition}`))
+          : `position ${book.idealPosition}`;
+        const dir = book.idealPosition < book.shelfPosition ? 'LEFT' : 'RIGHT';
+        actionEl.innerHTML = `Move <b>${dir}</b> — place before <b>${escapeHtml(String(destName))}</b>`;
+        actionEl.style.background = '#1e3a8a';
+        actionEl.style.color      = '#dbeafe';
+      } else {
+        actionEl.textContent = '';
+      }
+    }
+
+    // Reposition the arrow if the viewport changes (rotation, etc).
+    window.addEventListener('resize', () => {
+      if (stepIssues.length > 0 && document.getElementById('stepThrough')) renderStep();
+    });
 
     // ── Tap-to-inspect: show OCR readout for the tapped book ──
     function enableInspect() {
@@ -1380,6 +1537,8 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
 
     function newScan() {
       document.getElementById('resultsOverlay')?.remove();
+      document.getElementById('stepThrough')?.remove();
+      stepIssues = [];
       disableInspect();
       retake();
     }
