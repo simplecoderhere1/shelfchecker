@@ -1372,14 +1372,15 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
     // and flatten back to a single array (preserving each book's display position).
     function checkOrder(books, section) {
       const { shelves, ungrouped } = groupByShelf(books);
-      const checkedShelves = shelves.flatMap(shelf => {
+      const checkedShelves = shelves.flatMap((shelf, si) => {
         const clipped = clipShelfBoxes(shelf);
-        return checkOrderOneShelf(clipped, section);
+        // Tag each book with its shelf index so we can match shelf-mates later
+        return checkOrderOneShelf(clipped, section).map(b => ({ ...b, shelfIndex: si }));
       });
       // Ungrouped books (no bounding box) — pass through as unverifiable, no shelf info
       const checkedUngrouped = ungrouped.map(b => ({
         ...b, outOfOrder: false, unverifiable: true, idealPosition: null,
-        shelfPosition: null, shelfSize: null, tiedGroupSlots: null,
+        shelfPosition: null, shelfSize: null, shelfIndex: -1, tiedGroupSlots: null,
       }));
       return [...checkedShelves, ...checkedUngrouped];
     }
@@ -1513,22 +1514,28 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
         arrow.classList.toggle('step-arrow-unv',  !!book.unverifiable && !book.outOfOrder);
       }
 
-      // Destination arrow: green, shown when a book needs to move somewhere specific.
+      // Find the destination book (the one currently sitting at idealPosition on this shelf).
+      // Used by both the green arrow and the card text below.
+      let dest = null;
+      let destVisible = false;
+      if (book.outOfOrder && book.idealPosition && book.shelfPosition) {
+        dest = lastCheckedBooks.find(
+          b => b.shelfIndex === book.shelfIndex && b.shelfPosition === book.idealPosition
+        );
+        destVisible = !!(dest && dest.bounding_box);
+      }
+
+      // Destination arrow: green, shown when we can point at the target location.
       const destArrow = document.getElementById('stepArrowDest');
       if (destArrow) {
-        let showDest = false;
-        if (book.outOfOrder && book.idealPosition && book.shelfPosition) {
-          const dest = lastCheckedBooks.find(
-            b => b.shelfSize === book.shelfSize && b.shelfPosition === book.idealPosition
-          );
-          if (dest && dest.bounding_box) {
-            const pos = boxToArrowPos(dest.bounding_box);
-            destArrow.style.left = `${pos.left}px`;
-            destArrow.style.top  = `${pos.top}px`;
-            showDest = true;
-          }
+        if (destVisible) {
+          const pos = boxToArrowPos(dest.bounding_box);
+          destArrow.style.left = `${pos.left}px`;
+          destArrow.style.top  = `${pos.top}px`;
+          destArrow.style.display = '';
+        } else {
+          destArrow.style.display = 'none';
         }
-        destArrow.style.display = showDest ? '' : 'none';
       }
 
       document.getElementById('stepArrowNum').textContent = String(book.shelfPosition ?? book.position ?? '?');
@@ -1547,16 +1554,19 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
         actionEl.style.background = '#713f12';
         actionEl.style.color      = '#fde047';
       } else if (book.outOfOrder && book.idealPosition && book.shelfPosition) {
-        const dest = lastCheckedBooks.find(
-          b => b.shelfSize === book.shelfSize && b.shelfPosition === book.idealPosition
-        );
-        const destName = dest
-          ? (dest.title || dest.spine_label || (dest.author_last ? `${dest.author_last}'s book` : `position ${book.idealPosition}`))
-          : `position ${book.idealPosition}`;
         const dir = book.idealPosition < book.shelfPosition ? 'LEFT' : 'RIGHT';
-        actionEl.innerHTML = `Move <b>${dir}</b> — place before <b>${escapeHtml(String(destName))}</b>`;
-        actionEl.style.background = '#1e3a8a';
-        actionEl.style.color      = '#dbeafe';
+        if (dest) {
+          const destName = dest.title || dest.spine_label
+            || (dest.author_last ? `${dest.author_last}'s book` : `position ${book.idealPosition}`);
+          actionEl.innerHTML = `Move <b>${dir}</b> — place before <b>${escapeHtml(String(destName))}</b>`;
+          actionEl.style.background = '#1e3a8a';
+          actionEl.style.color      = '#dbeafe';
+        } else {
+          // Destination isn't visible in this photo
+          actionEl.innerHTML = `This book is <b>out of order</b> — its correct spot isn't visible in this photo. It should go <b>${dir}</b>, off the edge of the shelf shown.`;
+          actionEl.style.background = '#78350f';
+          actionEl.style.color      = '#fde68a';
+        }
       } else {
         actionEl.textContent = '';
       }
@@ -1616,13 +1626,18 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       // Find the book currently sitting at the ideal shelf-position so we can name it.
       let moveText = null;
       if (best.outOfOrder && best.idealPosition && best.shelfPosition) {
-        const shelfMates = lastCheckedBooks.filter(b => b.shelfSize === best.shelfSize && b.shelfPosition);
-        const dest = shelfMates.find(b => b.shelfPosition === best.idealPosition);
-        const destName = dest
-          ? (dest.title || dest.spine_label || (dest.author_last && `${dest.author_last}'s book`) || `the book at position ${best.idealPosition}`)
-          : `position ${best.idealPosition}`;
+        const dest = lastCheckedBooks.find(
+          b => b.shelfIndex === best.shelfIndex && b.shelfPosition === best.idealPosition
+        );
         const direction = best.idealPosition < best.shelfPosition ? 'left' : 'right';
-        moveText = `Move ${direction} — place before <b>${escapeHtml(String(destName))}</b> (currently #${best.idealPosition} on this shelf).`;
+        if (dest) {
+          const destName = dest.title || dest.spine_label
+            || (dest.author_last && `${dest.author_last}'s book`)
+            || `the book at position ${best.idealPosition}`;
+          moveText = `Move ${direction} — place before <b>${escapeHtml(String(destName))}</b> (currently #${best.idealPosition} on this shelf).`;
+        } else {
+          moveText = `Out of order — correct spot is off the edge of this photo (${direction}).`;
+        }
       }
 
       const status = best.unverifiable ? 'Couldn\'t read this spine clearly — not sure if it\'s in order.'
