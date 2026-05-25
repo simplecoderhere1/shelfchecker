@@ -219,6 +219,37 @@
       animation: flash 0.25s ease-out forwards;
     }
 
+    /* Loading overlay */
+    .loading-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 25;
+      background: rgba(0, 0, 0, 0.55);
+      backdrop-filter: blur(2px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+    }
+    .loading-spinner {
+      width: 48px;
+      height: 48px;
+      border: 4px solid rgba(255, 255, 255, 0.18);
+      border-top-color: #2563eb;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .loading-text {
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+    }
+
     /* Results overlay */
     .results-overlay {
       position: absolute;
@@ -525,19 +556,65 @@
     }
 
     function buildPrompt(section) {
-      return `You are reading a library bookshelf photo. List every book spine visible, left to right.
-Return ONLY valid JSON — an array of objects with these fields: position, title, author_last, call_number, confidence, bounding_box.
-bounding_box should be [ymin, xmin, ymax, xmax] with values 0-1000 (0,0 = top-left of image). Draw a tight box around each book spine.
+      return `You are reading a library bookshelf photo. Identify every individual book spine visible, ordered left to right (and top to bottom across multiple shelves).
+
+For each spine, return:
+- position: 1-indexed reading order
+- title: as printed on the spine, or null if unreadable
+- author_last: author's last name only, or null
+- call_number: Dewey number (for nonfiction), or null
+- confidence: "high" | "medium" | "low" based on how clearly you can read the spine
+- bounding_box: [ymin, xmin, ymax, xmax] in normalized 0-1000 coordinates (0,0 = top-left)
+
+CRITICAL bounding box rules:
+- Each box must hug ONLY ONE spine — tight to its left, right, top, and bottom edges
+- Do NOT include the shelf, the gap between books, or adjacent spines
+- Spines are vertical: boxes should be tall and narrow
+- For a spine that runs the full height of a shelf, ymin = top of shelf, ymax = bottom of shelf
+- xmin and xmax should hug ONLY the spine's own width — not its neighbor
+- Before returning each box, verify: "does this rectangle contain exactly one spine and nothing else?"
+
 Section type: ${section.toUpperCase()}
-If a field is unreadable, use null. Do not guess. Confidence should be "high", "medium", or "low".
-Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":null,"confidence":"high","bounding_box":[100,50,900,150]}]`;
+Return ONLY valid JSON. Use null for unreadable fields — never guess.
+Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":null,"confidence":"high","bounding_box":[80,50,920,140]}]`;
+    }
+
+    // Resize snapshot to max 1024px on long side, JPEG quality 0.75
+    function getResizedImageData(maxDim = 1024, quality = 0.75) {
+      const W = snapshot.width;
+      const H = snapshot.height;
+      const scale = Math.min(1, maxDim / Math.max(W, H));
+
+      if (scale === 1) {
+        return snapshot.toDataURL('image/jpeg', quality).split(',')[1];
+      }
+
+      const tmp  = document.createElement('canvas');
+      tmp.width  = Math.round(W * scale);
+      tmp.height = Math.round(H * scale);
+      tmp.getContext('2d').drawImage(snapshot, 0, 0, tmp.width, tmp.height);
+      return tmp.toDataURL('image/jpeg', quality).split(',')[1];
+    }
+
+    function showLoading() {
+      const overlay = document.createElement('div');
+      overlay.id        = 'loadingOverlay';
+      overlay.className = 'loading-overlay';
+      overlay.innerHTML = `
+        <div class="loading-spinner"></div>
+        <div class="loading-text">READING SPINES…</div>`;
+      cameraWrap.appendChild(overlay);
+    }
+    function hideLoading() {
+      document.getElementById('loadingOverlay')?.remove();
     }
 
     async function analyzeShelf() {
       analyzeBtn.disabled    = true;
       analyzeBtn.textContent = 'Analyzing…';
+      showLoading();
 
-      const imageData = snapshot.toDataURL('image/jpeg', 0.92).split(',')[1];
+      const imageData = getResizedImageData();
       const section   = getSection();
 
       try {
@@ -570,6 +647,8 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
         alert('Something went wrong: ' + err.message);
         analyzeBtn.disabled    = false;
         analyzeBtn.textContent = 'Analyze';
+      } finally {
+        hideLoading();
       }
     }
 
