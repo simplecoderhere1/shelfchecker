@@ -296,6 +296,67 @@
       color: #fff;
     }
 
+    /* Tap-to-inspect popup */
+    .book-inspect {
+      position: absolute;
+      left: 50%;
+      bottom: 80px;
+      transform: translateX(-50%);
+      z-index: 30;
+      width: min(86%, 320px);
+      background: rgba(20, 20, 20, 0.96);
+      backdrop-filter: blur(6px);
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 14px 16px 12px;
+      font-size: 13px;
+      color: #eee;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+    .bi-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 4px 0;
+    }
+    .bi-key {
+      color: #888;
+      flex-shrink: 0;
+    }
+    .bi-val {
+      color: #eee;
+      text-align: right;
+      word-break: break-word;
+    }
+    .bi-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .bi-status {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #2c2c2c;
+      font-weight: 600;
+      color: #cbd5e1;
+      text-align: center;
+    }
+    .bi-close {
+      position: absolute;
+      top: 6px;
+      right: 8px;
+      background: transparent;
+      border: none;
+      color: #888;
+      font-size: 22px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 4px 8px;
+    }
+
     /* ── Footer ──────────────────────────────────────── */
 
     .footer {
@@ -590,6 +651,7 @@ CRITICAL bounding box rules:
 - Spines are vertical: boxes should be tall and narrow
 - For a spine that runs the full height of a shelf, ymin = top of shelf, ymax = bottom of shelf
 - xmin and xmax should hug ONLY the spine's own width — not its neighbor
+- A box must NEVER cross from one shelf into another. If a spine is on the TOP shelf, its ymax must stop at the visible shelf surface below it — do NOT continue into the next shelf.
 - Before returning each box, verify: "does this rectangle contain exactly one spine and nothing else?"
 
 ${sectionInstruction}
@@ -819,44 +881,161 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
       return set;
     }
 
-    function checkOrder(books, section) {
-      // Compute keys; partition into verifiable (has key) and unverifiable (null key).
+    // Group books into shelf rows by Y-coordinate clustering.
+    // Within each shelf, books are sorted left-to-right by X-center.
+    // Returns { shelves: [[book, ...], ...], ungrouped: [book, ...] }.
+    function groupByShelf(books) {
+      const ungrouped = [];
+      const boxed    = [];
+      for (const b of books) {
+        if (!b.bounding_box || b.bounding_box.length !== 4) ungrouped.push(b);
+        else boxed.push(b);
+      }
+      if (boxed.length === 0) return { shelves: [], ungrouped };
+
+      // Compute Y-center and height per book
+      const enriched = boxed.map(b => {
+        const [ymin, , ymax] = b.bounding_box;
+        return { book: b, yc: (ymin + ymax) / 2, h: Math.max(1, ymax - ymin) };
+      });
+
+      // Sort by Y-center
+      enriched.sort((a, b) => a.yc - b.yc);
+
+      // Median spine height — threshold for starting a new shelf
+      const heights = [...enriched.map(e => e.h)].sort((a, b) => a - b);
+      const medianH = heights[Math.floor(heights.length / 2)] || 100;
+      const gapThreshold = medianH * 0.6;
+
+      // Walk and split into shelves
+      const shelves = [[enriched[0]]];
+      for (let i = 1; i < enriched.length; i++) {
+        const gap = enriched[i].yc - enriched[i - 1].yc;
+        if (gap > gapThreshold) shelves.push([]);
+        shelves[shelves.length - 1].push(enriched[i]);
+      }
+
+      // Within each shelf, sort by X-center (left to right)
+      const result = shelves.map(shelf => {
+        shelf.sort((a, b) => {
+          const ax = (a.book.bounding_box[1] + a.book.bounding_box[3]) / 2;
+          const bx = (b.book.bounding_box[1] + b.book.bounding_box[3]) / 2;
+          return ax - bx;
+        });
+        return shelf.map(e => e.book);
+      });
+
+      return { shelves: result, ungrouped };
+    }
+
+    // Clip box heights so they don't bleed across shelves.
+    // For each shelf, compute median ymin/ymax; clamp outliers to that band.
+    function clipShelfBoxes(shelfBooks) {
+      if (shelfBooks.length < 2) return shelfBooks;
+      const ymins = shelfBooks.map(b => b.bounding_box[0]).sort((a, b) => a - b);
+      const ymaxs = shelfBooks.map(b => b.bounding_box[2]).sort((a, b) => a - b);
+      const medYmin = ymins[Math.floor(ymins.length / 2)];
+      const medYmax = ymaxs[Math.floor(ymaxs.length / 2)];
+      const heights = shelfBooks.map(b => b.bounding_box[2] - b.bounding_box[0]).sort((a, b) => a - b);
+      const medH = heights[Math.floor(heights.length / 2)];
+      const tol = medH * 0.25;
+
+      return shelfBooks.map(b => {
+        const [ymin, xmin, ymax, xmax] = b.bounding_box;
+        const clampedYmin = ymin < medYmin - tol ? medYmin : ymin;
+        const clampedYmax = ymax > medYmax + tol ? medYmax : ymax;
+        return { ...b, bounding_box: [clampedYmin, xmin, clampedYmax, xmax] };
+      });
+    }
+
+    // Check order for a single shelf of books (already sorted left→right within the shelf).
+    function checkOrderOneShelf(books, section) {
       const keys = books.map(b => sortKey(b, section));
       const verifiableIdx = [];
       keys.forEach((k, i) => { if (k !== null) verifiableIdx.push(i); });
 
-      // LIS over only the verifiable books
       const verifiableKeys = verifiableIdx.map(i => keys[i]);
       const lisLocal       = longestNonDecreasingSubseq(verifiableKeys);
       const lisGlobal      = new Set([...lisLocal].map(localIdx => verifiableIdx[localIdx]));
 
-      // Ideal position = rank when verifiable books are sorted by key, then mapped back to 1-indexed
-      // book position. Use a stable sort by sorting indices.
+      // Ideal position = the slot (within this shelf) that the rank-th sorted book occupies.
+      // Positions are 1-indexed WITHIN this shelf only.
       const sortedVerifiable = [...verifiableIdx].sort((a, b) => compareKeys(keys[a], keys[b]));
-      const idealRank = new Map();  // bookIndex → 1-indexed ideal position among ALL books
+      const idealRank = new Map();
       sortedVerifiable.forEach((origIdx, rank) => {
-        // Map rank (0-indexed within verifiable) to a 1-indexed position in the full list.
-        // We slot verifiable books into the positions they collectively occupy, in order.
         idealRank.set(origIdx, verifiableIdx[rank] + 1);
       });
 
-      return books.map((book, i) => {
-        if (keys[i] === null) {
-          return { ...book, outOfOrder: false, unverifiable: true, idealPosition: null };
+      // Compute tied-group slot ranges: for each book, the inclusive [min,max] slot range
+      // of all verifiable books that tie with it. If a book's current shelf position falls
+      // inside its tied range, it's not really "out of order" even if the LIS excluded it.
+      const tiedGroupSlots = new Map();
+      let r = 0;
+      while (r < sortedVerifiable.length) {
+        let s = r;
+        while (
+          s + 1 < sortedVerifiable.length &&
+          compareKeys(keys[sortedVerifiable[s + 1]], keys[sortedVerifiable[r]]) === 0
+        ) s++;
+        // Slot range = [verifiableIdx[r]+1, verifiableIdx[s]+1]
+        const lo = verifiableIdx[r] + 1;
+        const hi = verifiableIdx[s] + 1;
+        for (let k = r; k <= s; k++) {
+          tiedGroupSlots.set(sortedVerifiable[k], [lo, hi]);
         }
+        r = s + 1;
+      }
+
+      return books.map((book, i) => {
+        // Shelf-relative position is i+1
+        const shelfPos = i + 1;
+        if (keys[i] === null) {
+          return {
+            ...book, outOfOrder: false, unverifiable: true,
+            idealPosition: null, shelfPosition: shelfPos,
+            shelfSize: books.length, tiedGroupSlots: null,
+          };
+        }
+        const ideal = idealRank.get(i) ?? null;
+        const tied  = tiedGroupSlots.get(i) || null;
+        // If position falls inside its tied group's slot range, treat as in-order
+        const inTiedRange = tied && shelfPos >= tied[0] && shelfPos <= tied[1];
         const inLis = lisGlobal.has(i);
+        const outOfOrder = !inLis && !inTiedRange;
         return {
           ...book,
-          outOfOrder:   !inLis,
+          outOfOrder,
           unverifiable: false,
-          idealPosition: idealRank.get(i) ?? null,
+          idealPosition: ideal,
+          shelfPosition: shelfPos,
+          shelfSize: books.length,
+          tiedGroupSlots: tied,
         };
       });
     }
 
+    // Public entry: group by shelf, clip boxes per shelf, run order check per shelf,
+    // and flatten back to a single array (preserving each book's display position).
+    function checkOrder(books, section) {
+      const { shelves, ungrouped } = groupByShelf(books);
+      const checkedShelves = shelves.flatMap(shelf => {
+        const clipped = clipShelfBoxes(shelf);
+        return checkOrderOneShelf(clipped, section);
+      });
+      // Ungrouped books (no bounding box) — pass through as unverifiable, no shelf info
+      const checkedUngrouped = ungrouped.map(b => ({
+        ...b, outOfOrder: false, unverifiable: true, idealPosition: null,
+        shelfPosition: null, shelfSize: null, tiedGroupSlots: null,
+      }));
+      return [...checkedShelves, ...checkedUngrouped];
+    }
+
     // ── Results: draw boxes on photo + overlay summary ────
+    let lastCheckedBooks = [];
+
     function showResults(books, section) {
       const checked  = checkOrder(books, section);
+      lastCheckedBooks = checked;
       const outCount = checked.filter(b => b.outOfOrder).length;
       const unvCount = checked.filter(b => b.unverifiable).length;
 
@@ -879,10 +1058,19 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
         ctx.lineWidth   = Math.max(3, W / 250);
         ctx.strokeRect(x, y, w, h);
 
-        // Pill label: green/yellow get short label, red gets "current→ideal"
+        // Decide pill label.
+        // - Green/in-order: show display position
+        // - Yellow/unverifiable: show "?"
+        // - Red/out-of-order: show "shelfPos→ideal" only when the move is meaningful
+        //   (ideal differs from current AND the book is not within its tied slot range).
         let label, fontMult, pillMult;
-        if (book.outOfOrder && book.idealPosition != null) {
-          label    = `${book.position}→${book.idealPosition}`;
+        const shelfPos = book.shelfPosition;
+        const ideal    = book.idealPosition;
+        const inTied   = book.tiedGroupSlots && shelfPos >= book.tiedGroupSlots[0] && shelfPos <= book.tiedGroupSlots[1];
+        const showArrow = book.outOfOrder && ideal != null && shelfPos != null && ideal !== shelfPos && !inTied;
+
+        if (showArrow) {
+          label    = `${shelfPos}→${ideal}`;
           fontMult = 0.85;
           pillMult = 3.2;
         } else if (book.unverifiable) {
@@ -937,10 +1125,80 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
       cameraWrap.appendChild(overlay);
 
       actionBtns.classList.remove('show');
+      enableInspect();
+    }
+
+    // ── Tap-to-inspect: show OCR readout for the tapped book ──
+    function enableInspect() {
+      snapshot.style.pointerEvents = 'auto';
+      snapshot.style.cursor = 'pointer';
+      snapshot.addEventListener('click', inspectHandler);
+    }
+
+    function disableInspect() {
+      snapshot.style.pointerEvents = '';
+      snapshot.style.cursor = '';
+      snapshot.removeEventListener('click', inspectHandler);
+      document.getElementById('bookInspect')?.remove();
+    }
+
+    function inspectHandler(e) {
+      // Translate click to canvas-internal coordinates (object-fit: contain)
+      const rect = snapshot.getBoundingClientRect();
+      const cw = snapshot.width, ch = snapshot.height;
+      const dispScale = Math.min(rect.width / cw, rect.height / ch);
+      const dispW = cw * dispScale, dispH = ch * dispScale;
+      const offX = (rect.width  - dispW) / 2;
+      const offY = (rect.height - dispH) / 2;
+      const px = (e.clientX - rect.left - offX) / dispScale;
+      const py = (e.clientY - rect.top  - offY) / dispScale;
+
+      // Hit-test against book boxes (prefer smallest box if multiple contain the point)
+      let best = null, bestArea = Infinity;
+      for (const b of lastCheckedBooks) {
+        if (!b.bounding_box) continue;
+        const [ymin, xmin, ymax, xmax] = b.bounding_box;
+        const x = (xmin / 1000) * cw;
+        const y = (ymin / 1000) * ch;
+        const w = ((xmax - xmin) / 1000) * cw;
+        const h = ((ymax - ymin) / 1000) * ch;
+        if (px >= x && px <= x + w && py >= y && py <= y + h) {
+          const area = w * h;
+          if (area < bestArea) { best = b; bestArea = area; }
+        }
+      }
+
+      document.getElementById('bookInspect')?.remove();
+      if (!best) return;
+
+      const confColor = best.confidence === 'high' ? '#4ade80' : best.confidence === 'medium' ? '#facc15' : '#f87171';
+      const status = best.unverifiable ? 'Unverifiable'
+                   : best.outOfOrder    ? `Should be at shelf position ${best.idealPosition}`
+                   :                       'In order';
+
+      const card = document.createElement('div');
+      card.id = 'bookInspect';
+      card.className = 'book-inspect';
+      card.innerHTML = `
+        <div class="bi-row"><span class="bi-key">Title</span><span class="bi-val">${escapeHtml(best.title) || '—'}</span></div>
+        <div class="bi-row"><span class="bi-key">Author</span><span class="bi-val">${escapeHtml(best.author_last) || '—'}</span></div>
+        <div class="bi-row"><span class="bi-key">Label</span><span class="bi-val">${escapeHtml(best.spine_label || best.call_number) || '—'}</span></div>
+        <div class="bi-row"><span class="bi-key">Confidence</span><span class="bi-val"><span class="bi-dot" style="background:${confColor}"></span>${best.confidence || '—'}</span></div>
+        <div class="bi-row"><span class="bi-key">Position</span><span class="bi-val">${best.shelfPosition ?? '—'} of ${best.shelfSize ?? '—'} on this shelf</span></div>
+        <div class="bi-status">${status}</div>
+        <button class="bi-close" aria-label="Close">×</button>`;
+      cameraWrap.appendChild(card);
+      card.querySelector('.bi-close').addEventListener('click', () => card.remove());
+    }
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
 
     function newScan() {
       document.getElementById('resultsOverlay')?.remove();
+      disableInspect();
       retake();
     }
 
