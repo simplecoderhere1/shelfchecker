@@ -90,10 +90,14 @@
 
     #snapshot {
       position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
+      left: 7%;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 86%;
+      aspect-ratio: 16 / 6;
       display: none;
+      background: #000;
+      border-radius: 6px;
     }
 
     /* Guide overlay */
@@ -457,7 +461,7 @@
       if (e.touches.length < 2) lastPinchDist = null;
     }, { passive: true });
 
-    // ── Capture: instant shot with flash ─────────────────
+    // ── Capture: crop to guide box ───────────────────────
     function capture() {
       const cw  = cameraWrap.clientWidth;
       const ch  = cameraWrap.clientHeight;
@@ -465,18 +469,29 @@
       const vw  = video.videoWidth  || cw;
       const vh  = video.videoHeight || ch;
 
-      // Draw at display-pixel resolution (sharp on retina)
-      snapshot.width  = Math.round(cw * dpr);
-      snapshot.height = Math.round(ch * dpr);
+      // Guide box dimensions in screen coords (matches CSS: width 86%, aspect 16:6)
+      const gwScreen = cw * 0.86;
+      const ghScreen = gwScreen * 6 / 16;
+      const gxScreen = cw * 0.07;
+      const gyScreen = (ch - ghScreen) / 2;
 
-      const scale = Math.max(snapshot.width / vw, snapshot.height / vh);
-      const sw = vw * scale;
-      const sh = vh * scale;
+      // Video is displayed with object-fit:cover — map screen back to video coords
+      const scale     = Math.max(cw / vw, ch / vh);
+      const offsetX   = (cw - vw * scale) / 2;
+      const offsetY   = (ch - vh * scale) / 2;
+      const gxVideo   = (gxScreen - offsetX) / scale;
+      const gyVideo   = (gyScreen - offsetY) / scale;
+      const gwVideo   = gwScreen / scale;
+      const ghVideo   = ghScreen / scale;
+
+      // Canvas at display-pixel resolution, matching guide aspect ratio
+      snapshot.width  = Math.round(gwScreen * dpr);
+      snapshot.height = Math.round(ghScreen * dpr);
+
       snapshot.getContext('2d').drawImage(
         video,
-        (snapshot.width  - sw) / 2,
-        (snapshot.height - sh) / 2,
-        sw, sh
+        gxVideo, gyVideo, gwVideo, ghVideo,
+        0, 0, snapshot.width, snapshot.height
       );
 
       // Flash animation
