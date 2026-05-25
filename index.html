@@ -281,8 +281,9 @@
       padding: 8px 14px;
       border-radius: 20px;
     }
-    .badge-ok   { background: #14532d; color: #4ade80; }
-    .badge-warn { background: #450a0a; color: #f87171; }
+    .badge-ok           { background: #14532d; color: #4ade80; }
+    .badge-warn         { background: #450a0a; color: #f87171; }
+    .badge-unverifiable { background: #713f12; color: #fde047; }
 
     .btn-new-scan {
       padding: 10px 20px;
@@ -573,6 +574,7 @@ For each spine, return:
 - title: as printed on the spine, or null if unreadable
 - author_last: author's last name only, or null
 - call_number: Dewey number (for nonfiction), or null
+- spine_label: the text printed on the white library sticker at the BOTTOM of the spine (e.g. "KIN" for a Stephen King novel, or "973.7 HAR" for nonfiction). This is the actual filing key the library uses. If no sticker is visible, return null.
 - confidence: "high" | "medium" | "low" based on how clearly you can read the spine
 - bounding_box: [ymin, xmin, ymax, xmax] in normalized 0-1000 coordinates (0,0 = top-left)
 
@@ -586,24 +588,59 @@ CRITICAL bounding box rules:
 
 Section type: ${section.toUpperCase()}
 Return ONLY valid JSON. Use null for unreadable fields — never guess.
-Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":null,"confidence":"high","bounding_box":[80,50,920,140]}]`;
+Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":null,"spine_label":"HER","confidence":"high","bounding_box":[80,50,920,140]}]`;
     }
 
-    // Resize snapshot to max 1024px on long side, JPEG quality 0.75
-    function getResizedImageData(maxDim = 1024, quality = 0.75) {
+    // Enhance image: contrast/saturation/brightness (GPU filter) + 3×3 sharpening
+    function preprocessImage(srcCanvas) {
+      const W = srcCanvas.width;
+      const H = srcCanvas.height;
+      const dst = document.createElement('canvas');
+      dst.width  = W;
+      dst.height = H;
+      const ctx = dst.getContext('2d');
+
+      // GPU-accelerated CSS filters
+      ctx.filter = 'contrast(1.25) saturate(1.15) brightness(1.05)';
+      ctx.drawImage(srcCanvas, 0, 0);
+      ctx.filter = 'none';
+
+      // Mild 3×3 sharpening convolution: [0,-1,0, -1,5,-1, 0,-1,0]
+      const kernel = [0, -1, 0, -1, 5, -1, 0, -1, 0];
+      const id  = ctx.getImageData(0, 0, W, H);
+      const src = new Uint8ClampedArray(id.data);
+      const out = id.data;
+
+      for (let y = 1; y < H - 1; y++) {
+        for (let x = 1; x < W - 1; x++) {
+          for (let c = 0; c < 3; c++) {
+            let v = 0;
+            for (let ky = -1; ky <= 1; ky++) {
+              for (let kx = -1; kx <= 1; kx++) {
+                v += src[((y + ky) * W + (x + kx)) * 4 + c] * kernel[(ky + 1) * 3 + (kx + 1)];
+              }
+            }
+            out[(y * W + x) * 4 + c] = Math.max(0, Math.min(255, v));
+          }
+        }
+      }
+      ctx.putImageData(id, 0, 0);
+      return dst;
+    }
+
+    // Resize snapshot to max 1280px on long side, JPEG quality 0.78, then enhance
+    function getResizedImageData(maxDim = 1280, quality = 0.78) {
       const W = snapshot.width;
       const H = snapshot.height;
       const scale = Math.min(1, maxDim / Math.max(W, H));
-
-      if (scale === 1) {
-        return snapshot.toDataURL('image/jpeg', quality).split(',')[1];
-      }
 
       const tmp  = document.createElement('canvas');
       tmp.width  = Math.round(W * scale);
       tmp.height = Math.round(H * scale);
       tmp.getContext('2d').drawImage(snapshot, 0, 0, tmp.width, tmp.height);
-      return tmp.toDataURL('image/jpeg', quality).split(',')[1];
+
+      const enhanced = preprocessImage(tmp);
+      return enhanced.toDataURL('image/jpeg', quality).split(',')[1];
     }
 
     let loadingTimer = null;
@@ -695,21 +732,54 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
     }
 
     // ── Ordering logic ────────────────────────────────────
+
+    // Parse a Dewey/cutter label like "973.7 HAR" or "KIN"
+    function parseDewey(s) {
+      if (!s) return null;
+      const m = s.match(/^\s*([0-9]+(?:\.[0-9]+)?|[A-Za-z]+)\s*([A-Za-z]+)?/i);
+      if (!m) return null;
+      const num = isNaN(parseFloat(m[1])) ? null : parseFloat(m[1]);
+      const cut = (m[2] || '').toLowerCase();
+      return { num, cut, prefix: m[1].toLowerCase() };
+    }
+
     function checkOrder(books, section) {
+      function sortKey(book) {
+        if (section === 'fiction') {
+          return book.spine_label?.toLowerCase() || book.author_last?.toLowerCase() || null;
+        } else {
+          return parseDewey(book.spine_label) || parseDewey(book.call_number) || null;
+        }
+      }
+
       return books.map((book, i) => {
-        if (i === 0) return { ...book, outOfOrder: false };
+        const keyB = sortKey(book);
+        if (i === 0) return { ...book, outOfOrder: false, unverifiable: keyB === null };
         const prev = books[i - 1];
+        const keyA = sortKey(prev);
+
+        // Can't verify order when this book has no key
+        if (keyB === null) return { ...book, outOfOrder: false, unverifiable: true };
+        // Previous book was unverifiable — can't compare, but this one is readable
+        if (keyA === null) return { ...book, outOfOrder: false, unverifiable: false };
 
         if (section === 'fiction') {
-          const a = (prev.author_last || '').toLowerCase();
-          const b = (book.author_last || '').toLowerCase();
-          const outOfOrder = b < a || (b === a && (book.title || '').toLowerCase() < (prev.title || '').toLowerCase());
-          return { ...book, outOfOrder };
+          // keyA/keyB are strings — use localeCompare for Mc/Mac etc.
+          const cmp = keyB.localeCompare(keyA, undefined, { sensitivity: 'base' });
+          return { ...book, outOfOrder: cmp < 0, unverifiable: false };
         } else {
-          const a = parseFloat(prev.call_number) || 0;
-          const b = parseFloat(book.call_number) || 0;
-          const outOfOrder = b < a || (b === a && (book.author_last || '').toLowerCase() < (prev.author_last || '').toLowerCase());
-          return { ...book, outOfOrder };
+          // keyA/keyB are parseDewey objects
+          let outOfOrder = false;
+          if (keyA.num !== null && keyB.num !== null) {
+            if (keyB.num < keyA.num) {
+              outOfOrder = true;
+            } else if (keyB.num === keyA.num) {
+              outOfOrder = keyB.cut.localeCompare(keyA.cut, undefined, { sensitivity: 'base' }) < 0;
+            }
+          } else {
+            outOfOrder = keyB.prefix.localeCompare(keyA.prefix, undefined, { sensitivity: 'base' }) < 0;
+          }
+          return { ...book, outOfOrder, unverifiable: false };
         }
       });
     }
@@ -718,6 +788,7 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
     function showResults(books, section) {
       const checked  = checkOrder(books, section);
       const outCount = checked.filter(b => b.outOfOrder).length;
+      const unvCount = checked.filter(b => b.unverifiable).length;
 
       const ctx = snapshot.getContext('2d');
       const W   = snapshot.width;
@@ -731,7 +802,8 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
         const w = ((xmax - xmin) / 1000) * W;
         const h = ((ymax - ymin) / 1000) * H;
 
-        const color = book.outOfOrder ? '#ef4444' : '#22c55e';
+        // Three-state color: red = out of order, yellow = unverifiable, green = ok
+        const color = book.outOfOrder ? '#ef4444' : book.unverifiable ? '#facc15' : '#22c55e';
 
         ctx.strokeStyle = color;
         ctx.lineWidth   = Math.max(3, W / 250);
@@ -745,19 +817,31 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
         ctx.roundRect(x, y - pillH, pillW, pillH, 4);
         ctx.fill();
 
-        ctx.fillStyle = '#fff';
+        ctx.fillStyle = book.unverifiable ? '#000' : '#fff';
         ctx.font      = `bold ${fontSize}px sans-serif`;
         ctx.textAlign = 'center';
         ctx.fillText(book.position, x + pillW / 2, y - pillH / 4);
         ctx.textAlign = 'left';
       });
 
+      let badgeClass, badgeText;
+      if (outCount > 0) {
+        badgeClass = 'badge-warn';
+        badgeText  = `⚠ ${outCount} out of order`;
+      } else if (unvCount > 0) {
+        badgeClass = 'badge-unverifiable';
+        badgeText  = `⚠ ${unvCount} unverifiable`;
+      } else {
+        badgeClass = 'badge-ok';
+        badgeText  = '✓ All in order';
+      }
+
       const overlay = document.createElement('div');
       overlay.id        = 'resultsOverlay';
       overlay.className = 'results-overlay';
       overlay.innerHTML = `
-        <div class="overlay-badge ${outCount > 0 ? 'badge-warn' : 'badge-ok'}">
-          ${outCount > 0 ? `⚠ ${outCount} out of order` : '✓ All in order'}
+        <div class="overlay-badge ${badgeClass}">
+          ${badgeText}
         </div>
         <button class="btn-new-scan" onclick="newScan()">New Scan</button>`;
       cameraWrap.appendChild(overlay);
