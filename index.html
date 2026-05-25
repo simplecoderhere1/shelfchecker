@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>ShelfCheck</title>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html { height: 100%; }
+
+    body {
+      height: 100vh;
+      height: 100dvh;
+      background: #0d0d0d;
+      color: #f0f0f0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ── Header ─────────────────────────────────────── */
+
+    .header {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      padding-top: max(12px, env(safe-area-inset-top));
+      background: #1c1c1c;
+      border-bottom: 1px solid #2c2c2c;
+    }
+
+    .app-name {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: #e0e0e0;
+    }
+
+    .section-tabs {
+      display: flex;
+      background: #2c2c2c;
+      border-radius: 8px;
+      padding: 3px;
+    }
+
+    .tab-btn {
+      padding: 5px 14px;
+      border-radius: 6px;
+      border: none;
+      background: transparent;
+      color: #888;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.18s, color 0.18s;
+      user-select: none;
+    }
+
+    .tab-btn.active {
+      background: #f0f0f0;
+      color: #111;
+    }
+
+    /* ── Camera area ─────────────────────────────────── */
+
+    .camera-wrap {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      background: #000;
+      min-height: 0;
+    }
+
+    #video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    #snapshot {
+      position: absolute;
+      top: 0;
+      left: 0;
+      display: none;
+    }
+
+    /* Guide overlay */
+    .guide {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .guide-box {
+      width: 86%;
+      aspect-ratio: 16 / 6;
+      border: 1.5px solid rgba(255, 255, 255, 0.35);
+      border-radius: 6px;
+      position: relative;
+      /* darken outside the frame */
+      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.30);
+    }
+
+    /* Four corner accents: guide-box::before/::after + inner <i>::before/::after */
+    .guide-box::before {
+      content: '';
+      position: absolute;
+      top: -2px; left: -2px;
+      width: 18px; height: 18px;
+      border-top: 2.5px solid rgba(255, 255, 255, 0.85);
+      border-left: 2.5px solid rgba(255, 255, 255, 0.85);
+      border-radius: 3px 0 0 0;
+    }
+    .guide-box::after {
+      content: '';
+      position: absolute;
+      bottom: -2px; right: -2px;
+      width: 18px; height: 18px;
+      border-bottom: 2.5px solid rgba(255, 255, 255, 0.85);
+      border-right: 2.5px solid rgba(255, 255, 255, 0.85);
+      border-radius: 0 0 3px 0;
+    }
+    .guide-box > i {
+      display: block;
+      position: absolute;
+      inset: 0;
+    }
+    .guide-box > i::before {
+      content: '';
+      position: absolute;
+      top: -2px; right: -2px;
+      width: 18px; height: 18px;
+      border-top: 2.5px solid rgba(255, 255, 255, 0.85);
+      border-right: 2.5px solid rgba(255, 255, 255, 0.85);
+      border-radius: 0 3px 0 0;
+    }
+    .guide-box > i::after {
+      content: '';
+      position: absolute;
+      bottom: -2px; left: -2px;
+      width: 18px; height: 18px;
+      border-bottom: 2.5px solid rgba(255, 255, 255, 0.85);
+      border-left: 2.5px solid rgba(255, 255, 255, 0.85);
+      border-radius: 0 0 0 3px;
+    }
+
+    .guide-label {
+      position: absolute;
+      bottom: -28px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.38);
+      letter-spacing: 0.07em;
+      white-space: nowrap;
+    }
+
+    /* Camera error state */
+    .cam-error {
+      position: absolute;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      padding: 32px;
+      text-align: center;
+      color: #666;
+      z-index: 20;
+    }
+    .cam-error.show { display: flex; }
+    .cam-error p { font-size: 14px; line-height: 1.65; max-width: 260px; }
+
+    /* ── Footer ──────────────────────────────────────── */
+
+    .footer {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 18px 24px;
+      padding-bottom: max(18px, env(safe-area-inset-bottom));
+      background: #1c1c1c;
+      border-top: 1px solid #2c2c2c;
+      min-height: 88px;
+    }
+
+    .capture-btn {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      border: 3px solid rgba(255, 255, 255, 0.8);
+      background: rgba(255, 255, 255, 0.1);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.1s ease, background 0.1s ease;
+    }
+    .capture-btn:active {
+      transform: scale(0.9);
+      background: rgba(255, 255, 255, 0.22);
+    }
+    .capture-btn-dot {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: #fff;
+      pointer-events: none;
+    }
+
+    .action-btns {
+      display: none;
+      gap: 12px;
+    }
+    .action-btns.show { display: flex; }
+
+    .btn {
+      padding: 13px 26px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: transform 0.1s ease;
+    }
+    .btn:active { transform: scale(0.96); }
+
+    .btn-retake {
+      background: #2e2e2e;
+      color: #ddd;
+    }
+
+    .btn-analyze {
+      background: #2563eb;
+      color: #fff;
+    }
+    .btn-analyze:disabled {
+      background: #1a2f5e;
+      color: #4e71b5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* ── Camera permission screen ────────────────────── */
+    .permission-screen {
+      position: absolute;
+      inset: 0;
+      z-index: 30;
+      background: #111;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      padding: 40px;
+      text-align: center;
+    }
+    .permission-screen.hidden { display: none; }
+
+    .permission-icon {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      background: #1e2a3a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .permission-title {
+      font-size: 20px;
+      font-weight: 600;
+      color: #f0f0f0;
+    }
+
+    .permission-desc {
+      font-size: 14px;
+      color: #888;
+      line-height: 1.6;
+      max-width: 260px;
+    }
+
+    .btn-start-camera {
+      margin-top: 8px;
+      padding: 15px 36px;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      background: #2563eb;
+      color: #fff;
+      transition: transform 0.1s ease, background 0.1s ease;
+    }
+    .btn-start-camera:active {
+      transform: scale(0.96);
+      background: #1d4ed8;
+    }
+  </style>
+</head>
+<body>
+
+  <header class="header">
+    <span class="app-name">ShelfCheck</span>
+    <div class="section-tabs" role="group" aria-label="Collection section">
+      <button class="tab-btn active" data-section="fiction">Fiction</button>
+      <button class="tab-btn"        data-section="nonfiction">Nonfiction</button>
+    </div>
+  </header>
+
+  <div class="camera-wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="snapshot"></canvas>
+
+    <div class="permission-screen" id="permissionScreen">
+      <div class="permission-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24"
+             fill="none" stroke="#2563eb" stroke-width="1.6"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+          <circle cx="12" cy="13" r="4"/>
+        </svg>
+      </div>
+      <p class="permission-title">Camera Access Needed</p>
+      <p class="permission-desc">ShelfCheck uses your camera to photograph book spines. Your photos are never stored.</p>
+      <button class="btn-start-camera" id="startCameraBtn">Allow Camera</button>
+    </div>
+
+    <div class="guide" id="guide">
+      <div class="guide-box">
+        <i></i>
+        <span class="guide-label">Frame the shelf here</span>
+      </div>
+    </div>
+
+    <div class="cam-error" id="camError">
+      <svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="1.2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+        <line x1="1" y1="1" x2="23" y2="23"/>
+      </svg>
+      <p>Camera access is required.<br>Please allow permissions and reload.</p>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <button class="capture-btn" id="captureBtn" aria-label="Capture photo">
+      <div class="capture-btn-dot"></div>
+    </button>
+    <div class="action-btns" id="actionBtns">
+      <button class="btn btn-retake"  id="retakeBtn">Retake</button>
+      <button class="btn btn-analyze" id="analyzeBtn" disabled>Analyze</button>
+    </div>
+  </footer>
+
+  <script>
+    const video            = document.getElementById('video');
+    const snapshot         = document.getElementById('snapshot');
+    const captureBtn       = document.getElementById('captureBtn');
+    const actionBtns       = document.getElementById('actionBtns');
+    const retakeBtn        = document.getElementById('retakeBtn');
+    const analyzeBtn       = document.getElementById('analyzeBtn');
+    const guide            = document.getElementById('guide');
+    const camError         = document.getElementById('camError');
+    const permissionScreen = document.getElementById('permissionScreen');
+    const startCameraBtn   = document.getElementById('startCameraBtn');
+
+    // Section toggle
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
+    // Start rear-facing camera
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: 'environment' },
+            width:  { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+          audio: false,
+        });
+        video.srcObject = stream;
+      } catch {
+        permissionScreen.classList.add('hidden');
+        video.style.display      = 'none';
+        guide.style.display      = 'none';
+        camError.classList.add('show');
+        captureBtn.disabled      = true;
+        captureBtn.style.opacity = '0.35';
+      }
+    }
+
+    // Capture: draw video frame onto canvas, replicating object-fit:cover
+    function capture() {
+      const cw = video.clientWidth;
+      const ch = video.clientHeight;
+      const vw = video.videoWidth  || cw;
+      const vh = video.videoHeight || ch;
+
+      snapshot.width  = cw;
+      snapshot.height = ch;
+
+      const scale = Math.max(cw / vw, ch / vh);
+      const sw    = vw * scale;
+      const sh    = vh * scale;
+
+      snapshot.getContext('2d').drawImage(video, (cw - sw) / 2, (ch - sh) / 2, sw, sh);
+
+      snapshot.style.display   = 'block';
+      guide.style.display      = 'none';
+      captureBtn.style.display = 'none';
+      actionBtns.classList.add('show');
+    }
+
+    // Retake: restore live view
+    function retake() {
+      snapshot.style.display   = 'none';
+      guide.style.display      = '';
+      captureBtn.style.display = '';
+      actionBtns.classList.remove('show');
+    }
+
+    captureBtn.addEventListener('click', capture);
+    retakeBtn.addEventListener('click', retake);
+    analyzeBtn.addEventListener('click', () => alert('AI coming soon'));
+
+    startCameraBtn.addEventListener('click', async () => {
+      startCameraBtn.textContent = 'Starting…';
+      startCameraBtn.disabled = true;
+      await startCamera();
+      permissionScreen.classList.add('hidden');
+    });
+  </script>
+
+</body>
+</html>
