@@ -258,6 +258,59 @@
       transform: none;
     }
 
+    /* ── Focus label ─────────────────────────────────── */
+    .focus-label {
+      display: none;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 15;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+      padding: 10px 20px;
+      border-radius: 20px;
+      letter-spacing: 0.04em;
+      pointer-events: none;
+    }
+
+    /* ── Results overlay ─────────────────────────────── */
+    .results-overlay {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 20;
+      padding: 20px 16px;
+      background: linear-gradient(transparent, rgba(0,0,0,0.85));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .overlay-badge {
+      font-size: 14px;
+      font-weight: 700;
+      padding: 8px 14px;
+      border-radius: 20px;
+    }
+    .badge-ok   { background: #14532d; color: #4ade80; }
+    .badge-warn { background: #450a0a; color: #f87171; }
+
+    .btn-new-scan {
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      background: #2563eb;
+      color: #fff;
+    }
+
     /* ── Camera permission screen ────────────────────── */
     .permission-screen {
       position: absolute;
@@ -455,6 +508,8 @@
       <button class="btn-start-camera" id="startCameraBtn">Allow Camera</button>
     </div>
 
+    <div class="focus-label" id="focusLabel">Focusing…</div>
+
     <div class="guide" id="guide">
       <div class="guide-box">
         <i></i>
@@ -534,27 +589,42 @@
       analyzeBtn.disabled = true;
     }
 
-    // ── Capture: enable Analyze once photo is taken ──────
+    // ── Capture: focus delay → full-res shot ─────────────
     function capture() {
-      const cw = video.clientWidth;
-      const ch = video.clientHeight;
-      const vw = video.videoWidth  || cw;
-      const vh = video.videoHeight || ch;
-
-      snapshot.width  = cw;
-      snapshot.height = ch;
-
-      const scale = Math.max(cw / vw, ch / vh);
-      const sw    = vw * scale;
-      const sh    = vh * scale;
-
-      snapshot.getContext('2d').drawImage(video, (cw - sw) / 2, (ch - sh) / 2, sw, sh);
-
-      snapshot.style.display   = 'block';
+      // Hide guide immediately, show focusing state
       guide.style.display      = 'none';
       captureBtn.style.display = 'none';
-      actionBtns.classList.add('show');
-      analyzeBtn.disabled = false;
+      captureBtn.disabled      = true;
+
+      const focusLabel = document.getElementById('focusLabel');
+      focusLabel.style.display = 'block';
+
+      // Wait for camera to autofocus
+      setTimeout(() => {
+        focusLabel.style.display = 'none';
+
+        // Capture at native video resolution for sharpness
+        const vw = video.videoWidth  || video.clientWidth;
+        const vh = video.videoHeight || video.clientHeight;
+
+        snapshot.width  = vw;
+        snapshot.height = vh;
+        snapshot.getContext('2d').drawImage(video, 0, 0, vw, vh);
+
+        // Scale canvas display to fill container like object-fit:cover
+        const cw = video.clientWidth;
+        const ch = video.clientHeight;
+        const scale = Math.max(cw / vw, ch / vh);
+        snapshot.style.width    = Math.round(vw * scale) + 'px';
+        snapshot.style.height   = Math.round(vh * scale) + 'px';
+        snapshot.style.top      = Math.round((ch - vh * scale) / 2) + 'px';
+        snapshot.style.left     = Math.round((cw - vw * scale) / 2) + 'px';
+        snapshot.style.display  = 'block';
+
+        actionBtns.classList.add('show');
+        analyzeBtn.disabled = false;
+        captureBtn.disabled = false;
+      }, 800);
     }
 
     captureBtn.addEventListener('click', capture);
@@ -570,10 +640,11 @@
 
     function buildPrompt(section) {
       return `You are reading a library bookshelf photo. List every book spine visible, left to right.
-Return ONLY valid JSON — an array of objects with these fields: position, title, author_last, call_number, confidence.
+Return ONLY valid JSON — an array of objects with these fields: position, title, author_last, call_number, confidence, bounding_box.
+bounding_box should be [ymin, xmin, ymax, xmax] with values 0-1000 (0,0 = top-left of image). Draw a tight box around each book spine.
 Section type: ${section.toUpperCase()}
 If a field is unreadable, use null. Do not guess. Confidence should be "high", "medium", or "low".
-Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":null,"confidence":"high"}]`;
+Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":null,"confidence":"high","bounding_box":[100,50,900,150]}]`;
     }
 
     async function analyzeShelf() {
@@ -638,40 +709,64 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
       });
     }
 
-    // ── Results screen ────────────────────────────────────
+    // ── Results: draw boxes on photo + overlay summary ────
     function showResults(books, section) {
       const checked = checkOrder(books, section);
       const outCount = checked.filter(b => b.outOfOrder).length;
 
-      const resultsHtml = `
-        <div class="results-screen" id="resultsScreen">
-          <div class="results-header">
-            <span class="results-title">${checked.length} books found</span>
-            <span class="results-badge ${outCount > 0 ? 'badge-warn' : 'badge-ok'}">
-              ${outCount > 0 ? `${outCount} out of order` : 'All in order'}
-            </span>
-          </div>
-          <ul class="book-list">
-            ${checked.map(b => `
-              <li class="book-item ${b.outOfOrder ? 'out-of-order' : ''}">
-                <span class="book-pos">${b.position}</span>
-                <div class="book-info">
-                  <span class="book-title">${b.title || '—'}</span>
-                  <span class="book-meta">${b.author_last || '—'}${b.call_number ? ' · ' + b.call_number : ''} · <span class="conf-${b.confidence}">${b.confidence}</span></span>
-                </div>
-                ${b.outOfOrder ? '<span class="out-tag">Out of order</span>' : ''}
-              </li>`).join('')}
-          </ul>
-          <button class="btn-new-scan" onclick="newScan()">New Scan</button>
-        </div>`;
+      // Draw bounding boxes on the canvas
+      const ctx = snapshot.getContext('2d');
+      const W   = snapshot.width;
+      const H   = snapshot.height;
 
-      document.querySelector('.camera-wrap').insertAdjacentHTML('beforeend', resultsHtml);
-      document.querySelector('.footer').style.display = 'none';
+      checked.forEach(book => {
+        if (!book.bounding_box) return;
+        const [ymin, xmin, ymax, xmax] = book.bounding_box;
+        const x = (xmin / 1000) * W;
+        const y = (ymin / 1000) * H;
+        const w = ((xmax - xmin) / 1000) * W;
+        const h = ((ymax - ymin) / 1000) * H;
+
+        const color = book.outOfOrder ? '#ef4444' : '#22c55e';
+
+        // Box
+        ctx.strokeStyle = color;
+        ctx.lineWidth   = Math.max(3, W / 200);
+        ctx.strokeRect(x, y, w, h);
+
+        // Label pill
+        const fontSize  = Math.max(16, W / 50);
+        const pillW     = fontSize * 1.8;
+        const pillH     = fontSize * 1.4;
+        ctx.fillStyle   = color;
+        ctx.beginPath();
+        ctx.roundRect(x, y - pillH, pillW, pillH, 4);
+        ctx.fill();
+
+        ctx.fillStyle  = '#fff';
+        ctx.font       = `bold ${fontSize}px sans-serif`;
+        ctx.textAlign  = 'center';
+        ctx.fillText(book.position, x + pillW / 2, y - pillH / 4);
+        ctx.textAlign  = 'left';
+      });
+
+      // Floating summary overlay
+      const overlay = document.createElement('div');
+      overlay.id = 'resultsOverlay';
+      overlay.className = 'results-overlay';
+      overlay.innerHTML = `
+        <div class="overlay-badge ${outCount > 0 ? 'badge-warn' : 'badge-ok'}">
+          ${outCount > 0 ? `⚠ ${outCount} out of order` : '✓ All in order'}
+        </div>
+        <button class="btn-new-scan" onclick="newScan()">New Scan</button>`;
+      document.querySelector('.camera-wrap').appendChild(overlay);
+
+      // Hide analyze/retake, keep overlay controls
+      actionBtns.classList.remove('show');
     }
 
     function newScan() {
-      document.getElementById('resultsScreen')?.remove();
-      document.querySelector('.footer').style.display = '';
+      document.getElementById('resultsOverlay')?.remove();
       retake();
     }
 
