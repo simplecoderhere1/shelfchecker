@@ -75,8 +75,16 @@
     .camera-wrap {
       flex: 1;
       position: relative;
-      overflow: hidden;
       background: #000;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .photo-area {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
       min-height: 0;
     }
 
@@ -335,11 +343,41 @@
       border-top-color: #facc15;
     }
 
-    .step-card {
+    /* Destination arrow — green, shown below source arrow when "place before X" */
+    .step-arrow-dest {
       position: absolute;
-      left: 0;
-      right: 0;
-      bottom: 0;
+      z-index: 22;
+      pointer-events: none;
+      transform: translate(-50%, -100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: left 0.28s ease, top 0.28s ease;
+      filter: drop-shadow(0 3px 8px rgba(0,0,0,0.5));
+    }
+    .step-arrow-dest-pill {
+      background: #16a34a;
+      color: #fff;
+      font-weight: 700;
+      font-size: 13px;
+      padding: 5px 12px;
+      border-radius: 18px;
+      text-align: center;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+    .step-arrow-dest-tip {
+      width: 0;
+      height: 0;
+      border-left: 9px solid transparent;
+      border-right: 9px solid transparent;
+      border-top: 13px solid #16a34a;
+      margin-top: -1px;
+    }
+
+    .step-card {
+      position: relative;   /* in normal flow — stacks below photo area */
+      flex-shrink: 0;
       z-index: 22;
       background: rgba(20, 20, 20, 0.97);
       backdrop-filter: blur(8px);
@@ -563,26 +601,30 @@
   </header>
 
   <div class="camera-wrap" id="cameraWrap">
-    <video id="video" autoplay playsinline muted></video>
-    <canvas id="snapshot"></canvas>
-    <div class="zoom-indicator" id="zoomIndicator"></div>
+    <!-- photo-area is the containing block for video/canvas and all their absolute overlays -->
+    <div class="photo-area" id="photoArea">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="snapshot"></canvas>
+      <div class="zoom-indicator" id="zoomIndicator"></div>
 
-    <div class="guide" id="guide">
-      <div class="guide-box">
-        <i></i>
-        <span class="guide-label">Frame the shelf here</span>
+      <div class="guide" id="guide">
+        <div class="guide-box">
+          <i></i>
+          <span class="guide-label">Frame the shelf here</span>
+        </div>
+      </div>
+
+      <div class="cam-error" id="camError">
+        <svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 24 24"
+             fill="none" stroke="currentColor" stroke-width="1.2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+          <line x1="1" y1="1" x2="23" y2="23"/>
+        </svg>
+        <p>Camera access is required.<br>Please allow permissions and reload.</p>
       </div>
     </div>
-
-    <div class="cam-error" id="camError">
-      <svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 24 24"
-           fill="none" stroke="currentColor" stroke-width="1.2"
-           stroke-linecap="round" stroke-linejoin="round">
-        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-        <line x1="1" y1="1" x2="23" y2="23"/>
-      </svg>
-      <p>Camera access is required.<br>Please allow permissions and reload.</p>
-    </div>
+    <!-- step-through, loading overlay, results overlay, book-inspect appended here by JS -->
   </div>
 
   <footer class="footer">
@@ -596,15 +638,16 @@
   </footer>
 
   <script>
-    const video       = document.getElementById('video');
-    const snapshot    = document.getElementById('snapshot');
-    const captureBtn  = document.getElementById('captureBtn');
-    const actionBtns  = document.getElementById('actionBtns');
-    const retakeBtn   = document.getElementById('retakeBtn');
-    const analyzeBtn  = document.getElementById('analyzeBtn');
-    const guide       = document.getElementById('guide');
-    const camError    = document.getElementById('camError');
-    const cameraWrap  = document.getElementById('cameraWrap');
+    const video         = document.getElementById('video');
+    const snapshot      = document.getElementById('snapshot');
+    const captureBtn    = document.getElementById('captureBtn');
+    const actionBtns    = document.getElementById('actionBtns');
+    const retakeBtn     = document.getElementById('retakeBtn');
+    const analyzeBtn    = document.getElementById('analyzeBtn');
+    const guide         = document.getElementById('guide');
+    const camError      = document.getElementById('camError');
+    const cameraWrap    = document.getElementById('cameraWrap');
+    const photoArea     = document.getElementById('photoArea');
     const zoomIndicator = document.getElementById('zoomIndicator');
 
     // Section toggle
@@ -686,8 +729,8 @@
 
     // ── Capture: crop to guide box ───────────────────────
     function capture() {
-      const cw  = cameraWrap.clientWidth;
-      const ch  = cameraWrap.clientHeight;
+      const cw  = photoArea.clientWidth;
+      const ch  = photoArea.clientHeight;
       const dpr = window.devicePixelRatio || 1;
       const vw  = video.videoWidth  || cw;
       const vh  = video.videoHeight || ch;
@@ -720,7 +763,7 @@
       // Flash animation
       const flash = document.createElement('div');
       flash.className = 'capture-flash';
-      cameraWrap.appendChild(flash);
+      photoArea.appendChild(flash);
       flash.addEventListener('animationend', () => flash.remove());
 
       snapshot.style.display   = 'block';
@@ -854,7 +897,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
         <div class="loading-text">READING SPINES…</div>
         <div class="loading-bar"><div class="loading-bar-fill" id="loadingBarFill"></div></div>
         <div class="loading-pct" id="loadingPct">0%</div>`;
-      cameraWrap.appendChild(overlay);
+      photoArea.appendChild(overlay);
 
       // Simulate progress: ease toward 85% over ~5s, then crawl toward 95%
       const fill = document.getElementById('loadingBarFill');
@@ -1347,7 +1390,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       overlay.innerHTML = `
         <div class="overlay-badge ${badgeClass}">${badgeText}</div>
         <button class="btn-new-scan" onclick="newScan()">New Scan</button>`;
-      cameraWrap.appendChild(overlay);
+      photoArea.appendChild(overlay);
     }
 
     function showStepThrough(outCount, unvCount) {
@@ -1360,6 +1403,10 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
         <div class="step-arrow" id="stepArrow">
           <div class="step-arrow-num" id="stepArrowNum">1</div>
           <div class="step-arrow-tip"></div>
+        </div>
+        <div class="step-arrow-dest" id="stepArrowDest" style="display:none">
+          <div class="step-arrow-dest-pill">place here</div>
+          <div class="step-arrow-dest-tip"></div>
         </div>
         <div class="step-card" id="stepCard">
           <div class="step-card-top">
@@ -1394,25 +1441,52 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       const book = stepIssues[stepCursor];
       if (!book) return;
 
-      // Position the arrow at this book's X-center, just above its top edge.
+      // Compute display transform once — used by both source and destination arrows.
+      // snapshot uses object-fit:contain, so we need to account for letterbox offsets.
+      const cw = snapshot.width, ch = snapshot.height;
+      const rect = snapshot.getBoundingClientRect();
+      const wrapRect = cameraWrap.getBoundingClientRect();
+      const dispScale = Math.min(rect.width / cw, rect.height / ch);
+      const dispW = cw * dispScale, dispH = ch * dispScale;
+      const offX = (rect.width  - dispW) / 2 + (rect.left - wrapRect.left);
+      const offY = (rect.height - dispH) / 2 + (rect.top  - wrapRect.top);
+
+      function boxToArrowPos(bb) {
+        const [ymin, xmin, , xmax] = bb;
+        const cx = ((xmin + xmax) / 2 / 1000) * cw;
+        const ty = (ymin / 1000) * ch;
+        return {
+          left: offX + cx * dispScale,
+          top:  Math.max(8, offY + ty * dispScale - 6),
+        };
+      }
+
+      // Position the source arrow at this book's X-center, just above its top edge.
       const arrow = document.getElementById('stepArrow');
       if (arrow && book.bounding_box) {
-        const [ymin, , , xmax] = book.bounding_box;
-        const xmin = book.bounding_box[1];
-        const cw = snapshot.width, ch = snapshot.height;
-        const rect = snapshot.getBoundingClientRect();
-        const wrapRect = cameraWrap.getBoundingClientRect();
-        const dispScale = Math.min(rect.width / cw, rect.height / ch);
-        const dispW = cw * dispScale, dispH = ch * dispScale;
-        const offX = (rect.width - dispW) / 2 + (rect.left - wrapRect.left);
-        const offY = (rect.height - dispH) / 2 + (rect.top - wrapRect.top);
-        const bookCenterX = ((xmin + xmax) / 2 / 1000) * cw;
-        const bookTopY    = (ymin / 1000) * ch;
-        arrow.style.left = `${offX + bookCenterX * dispScale}px`;
-        // Anchor the arrow just above the book; transform pulls it up by its own height
-        arrow.style.top  = `${Math.max(8, offY + bookTopY * dispScale - 6)}px`;
+        const pos = boxToArrowPos(book.bounding_box);
+        arrow.style.left = `${pos.left}px`;
+        arrow.style.top  = `${pos.top}px`;
         arrow.classList.toggle('step-arrow-warn', !!book.outOfOrder);
         arrow.classList.toggle('step-arrow-unv',  !!book.unverifiable && !book.outOfOrder);
+      }
+
+      // Destination arrow: green, shown when a book needs to move somewhere specific.
+      const destArrow = document.getElementById('stepArrowDest');
+      if (destArrow) {
+        let showDest = false;
+        if (book.outOfOrder && book.idealPosition && book.shelfPosition) {
+          const dest = lastCheckedBooks.find(
+            b => b.shelfSize === book.shelfSize && b.shelfPosition === book.idealPosition
+          );
+          if (dest && dest.bounding_box) {
+            const pos = boxToArrowPos(dest.bounding_box);
+            destArrow.style.left = `${pos.left}px`;
+            destArrow.style.top  = `${pos.top}px`;
+            showDest = true;
+          }
+        }
+        destArrow.style.display = showDest ? '' : 'none';
       }
 
       document.getElementById('stepArrowNum').textContent = String(book.shelfPosition ?? book.position ?? '?');
@@ -1526,7 +1600,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
         <div class="bi-status">${status}</div>
         ${moveText ? `<div class="bi-move">${moveText}</div>` : ''}
         <button class="bi-close" aria-label="Close">×</button>`;
-      cameraWrap.appendChild(card);
+      photoArea.appendChild(card);
       card.querySelector('.bi-close').addEventListener('click', () => card.remove());
     }
 
