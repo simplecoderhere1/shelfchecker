@@ -373,7 +373,8 @@
   <header class="header">
     <span class="app-name">ShelfCheck</span>
     <div class="section-tabs" role="group" aria-label="Collection section">
-      <button class="tab-btn active" data-section="fiction">Fiction</button>
+      <button class="tab-btn active" data-section="auto">Auto</button>
+      <button class="tab-btn"        data-section="fiction">Fiction</button>
       <button class="tab-btn"        data-section="nonfiction">Nonfiction</button>
     </div>
   </header>
@@ -567,6 +568,11 @@
     }
 
     function buildPrompt(section) {
+      const sectionInstruction =
+        section === 'auto'
+          ? 'Section type: AUTO. Detect for each book whether it is fiction (sort key = author last name) or nonfiction (sort key = Dewey/call number). Read every field you can.'
+          : `Section type: ${section.toUpperCase()}`;
+
       return `You are reading a library bookshelf photo. Identify every individual book spine visible, ordered left to right (and top to bottom across multiple shelves).
 
 For each spine, return:
@@ -586,7 +592,7 @@ CRITICAL bounding box rules:
 - xmin and xmax should hug ONLY the spine's own width — not its neighbor
 - Before returning each box, verify: "does this rectangle contain exactly one spine and nothing else?"
 
-Section type: ${section.toUpperCase()}
+${sectionInstruction}
 Return ONLY valid JSON. Use null for unreadable fields — never guess.
 Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":null,"spine_label":"HER","confidence":"high","bounding_box":[80,50,920,140]}]`;
     }
@@ -743,44 +749,108 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
       return { num, cut, prefix: m[1].toLowerCase() };
     }
 
-    function checkOrder(books, section) {
-      function sortKey(book) {
-        if (section === 'fiction') {
-          return book.spine_label?.toLowerCase() || book.author_last?.toLowerCase() || null;
-        } else {
-          return parseDewey(book.spine_label) || parseDewey(book.call_number) || null;
-        }
+    // Build a comparable sort key for a book given the chosen section.
+    // Returns null when there's no trustworthy signal (→ rendered yellow).
+    function sortKey(book, section) {
+      // Confidence-aware fallback: if we'd be relying purely on a low-confidence
+      // OCR'd author, treat as unverifiable instead of producing a false flag.
+      const lowConfNoLabel = book.confidence === 'low' && !book.spine_label;
+
+      if (section === 'fiction') {
+        if (book.spine_label) return { kind: 'str', val: book.spine_label.toLowerCase() };
+        if (lowConfNoLabel) return null;
+        if (book.author_last) return { kind: 'str', val: book.author_last.toLowerCase() };
+        return null;
       }
 
-      return books.map((book, i) => {
-        const keyB = sortKey(book);
-        if (i === 0) return { ...book, outOfOrder: false, unverifiable: keyB === null };
-        const prev = books[i - 1];
-        const keyA = sortKey(prev);
+      if (section === 'nonfiction') {
+        const d = parseDewey(book.spine_label) || parseDewey(book.call_number);
+        return d ? { kind: 'dewey', val: d } : null;
+      }
 
-        // Can't verify order when this book has no key
-        if (keyB === null) return { ...book, outOfOrder: false, unverifiable: true };
-        // Previous book was unverifiable — can't compare, but this one is readable
-        if (keyA === null) return { ...book, outOfOrder: false, unverifiable: false };
+      // auto: spine_label > Dewey-shaped call_number > author_last
+      if (book.spine_label) {
+        const d = parseDewey(book.spine_label);
+        return d && d.num !== null
+          ? { kind: 'dewey', val: d }
+          : { kind: 'str', val: book.spine_label.toLowerCase() };
+      }
+      if (book.call_number && /^\s*\d/.test(book.call_number)) {
+        const d = parseDewey(book.call_number);
+        if (d) return { kind: 'dewey', val: d };
+      }
+      if (lowConfNoLabel) return null;
+      if (book.author_last) return { kind: 'str', val: book.author_last.toLowerCase() };
+      return null;
+    }
 
-        if (section === 'fiction') {
-          // keyA/keyB are strings — use localeCompare for Mc/Mac etc.
-          const cmp = keyB.localeCompare(keyA, undefined, { sensitivity: 'base' });
-          return { ...book, outOfOrder: cmp < 0, unverifiable: false };
-        } else {
-          // keyA/keyB are parseDewey objects
-          let outOfOrder = false;
-          if (keyA.num !== null && keyB.num !== null) {
-            if (keyB.num < keyA.num) {
-              outOfOrder = true;
-            } else if (keyB.num === keyA.num) {
-              outOfOrder = keyB.cut.localeCompare(keyA.cut, undefined, { sensitivity: 'base' }) < 0;
-            }
-          } else {
-            outOfOrder = keyB.prefix.localeCompare(keyA.prefix, undefined, { sensitivity: 'base' }) < 0;
+    // Compare two sort keys. Returns <0, 0, >0.
+    function compareKeys(a, b) {
+      // Mixed kinds (one Dewey, one author string) — Dewey-shaped sorts first
+      // to match how libraries shelve (prefix nonfiction before fiction within a section).
+      if (a.kind !== b.kind) return a.kind === 'dewey' ? -1 : 1;
+      if (a.kind === 'str') return a.val.localeCompare(b.val, undefined, { sensitivity: 'base' });
+      // Dewey
+      const A = a.val, B = b.val;
+      const an = A.num === null ? -Infinity : A.num;
+      const bn = B.num === null ? -Infinity : B.num;
+      if (an !== bn) return an - bn;
+      return A.cut.localeCompare(B.cut, undefined, { sensitivity: 'base' });
+    }
+
+    // Longest non-decreasing subsequence of indices in `keys` (O(n²) DP, n is small).
+    // Returns a Set of indices that are part of the LIS.
+    function longestNonDecreasingSubseq(keys) {
+      const n = keys.length;
+      const dp   = new Array(n).fill(1);
+      const prev = new Array(n).fill(-1);
+      let bestEnd = 0;
+      for (let i = 0; i < n; i++) {
+        for (let j = 0; j < i; j++) {
+          if (compareKeys(keys[j], keys[i]) <= 0 && dp[j] + 1 > dp[i]) {
+            dp[i]   = dp[j] + 1;
+            prev[i] = j;
           }
-          return { ...book, outOfOrder, unverifiable: false };
         }
+        if (dp[i] > dp[bestEnd]) bestEnd = i;
+      }
+      const set = new Set();
+      for (let i = bestEnd; i !== -1; i = prev[i]) set.add(i);
+      return set;
+    }
+
+    function checkOrder(books, section) {
+      // Compute keys; partition into verifiable (has key) and unverifiable (null key).
+      const keys = books.map(b => sortKey(b, section));
+      const verifiableIdx = [];
+      keys.forEach((k, i) => { if (k !== null) verifiableIdx.push(i); });
+
+      // LIS over only the verifiable books
+      const verifiableKeys = verifiableIdx.map(i => keys[i]);
+      const lisLocal       = longestNonDecreasingSubseq(verifiableKeys);
+      const lisGlobal      = new Set([...lisLocal].map(localIdx => verifiableIdx[localIdx]));
+
+      // Ideal position = rank when verifiable books are sorted by key, then mapped back to 1-indexed
+      // book position. Use a stable sort by sorting indices.
+      const sortedVerifiable = [...verifiableIdx].sort((a, b) => compareKeys(keys[a], keys[b]));
+      const idealRank = new Map();  // bookIndex → 1-indexed ideal position among ALL books
+      sortedVerifiable.forEach((origIdx, rank) => {
+        // Map rank (0-indexed within verifiable) to a 1-indexed position in the full list.
+        // We slot verifiable books into the positions they collectively occupy, in order.
+        idealRank.set(origIdx, verifiableIdx[rank] + 1);
+      });
+
+      return books.map((book, i) => {
+        if (keys[i] === null) {
+          return { ...book, outOfOrder: false, unverifiable: true, idealPosition: null };
+        }
+        const inLis = lisGlobal.has(i);
+        return {
+          ...book,
+          outOfOrder:   !inLis,
+          unverifiable: false,
+          idealPosition: idealRank.get(i) ?? null,
+        };
       });
     }
 
@@ -809,9 +879,27 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
         ctx.lineWidth   = Math.max(3, W / 250);
         ctx.strokeRect(x, y, w, h);
 
-        const fontSize = Math.max(18, W / 55);
-        const pillW    = fontSize * 1.8;
-        const pillH    = fontSize * 1.4;
+        // Pill label: green/yellow get short label, red gets "current→ideal"
+        let label, fontMult, pillMult;
+        if (book.outOfOrder && book.idealPosition != null) {
+          label    = `${book.position}→${book.idealPosition}`;
+          fontMult = 0.85;
+          pillMult = 3.2;
+        } else if (book.unverifiable) {
+          label = '?';
+          fontMult = 1;
+          pillMult = 1.8;
+        } else {
+          label = String(book.position);
+          fontMult = 1;
+          pillMult = 1.8;
+        }
+
+        const baseFont = Math.max(18, W / 55);
+        const fontSize = baseFont * fontMult;
+        const pillW    = baseFont * pillMult;
+        const pillH    = baseFont * 1.4;
+
         ctx.fillStyle  = color;
         ctx.beginPath();
         ctx.roundRect(x, y - pillH, pillW, pillH, 4);
@@ -820,14 +908,16 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
         ctx.fillStyle = book.unverifiable ? '#000' : '#fff';
         ctx.font      = `bold ${fontSize}px sans-serif`;
         ctx.textAlign = 'center';
-        ctx.fillText(book.position, x + pillW / 2, y - pillH / 4);
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, x + pillW / 2, y - pillH / 2);
         ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
       });
 
       let badgeClass, badgeText;
       if (outCount > 0) {
         badgeClass = 'badge-warn';
-        badgeText  = `⚠ ${outCount} out of order`;
+        badgeText  = `⚠ ${outCount} to move`;
       } else if (unvCount > 0) {
         badgeClass = 'badge-unverifiable';
         badgeText  = `⚠ ${unvCount} unverifiable`;
