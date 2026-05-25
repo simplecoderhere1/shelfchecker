@@ -313,6 +313,118 @@
       transform: scale(0.96);
       background: #1d4ed8;
     }
+
+    /* ── Results screen ──────────────────────────────────── */
+    .results-screen {
+      position: absolute;
+      inset: 0;
+      z-index: 25;
+      background: #0d0d0d;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .results-header {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px;
+      border-bottom: 1px solid #2c2c2c;
+    }
+
+    .results-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #e0e0e0;
+    }
+
+    .results-badge {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 20px;
+    }
+    .badge-ok   { background: #14532d; color: #4ade80; }
+    .badge-warn { background: #450a0a; color: #f87171; }
+
+    .book-list {
+      flex: 1;
+      overflow-y: auto;
+      list-style: none;
+      padding: 8px 0;
+    }
+
+    .book-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid #1e1e1e;
+    }
+    .book-item.out-of-order { background: #1a0a0a; }
+
+    .book-pos {
+      flex-shrink: 0;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #2c2c2c;
+      color: #888;
+      font-size: 11px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .out-of-order .book-pos { background: #7f1d1d; color: #fca5a5; }
+
+    .book-info {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+    }
+
+    .book-title {
+      font-size: 14px;
+      font-weight: 500;
+      color: #e0e0e0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .book-meta {
+      font-size: 12px;
+      color: #666;
+    }
+
+    .conf-high   { color: #4ade80; }
+    .conf-medium { color: #facc15; }
+    .conf-low    { color: #f87171; }
+
+    .out-tag {
+      flex-shrink: 0;
+      font-size: 11px;
+      font-weight: 600;
+      color: #f87171;
+    }
+
+    .btn-new-scan {
+      flex-shrink: 0;
+      margin: 16px;
+      padding: 14px;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      background: #2563eb;
+      color: #fff;
+    }
   </style>
 </head>
 <body>
@@ -413,7 +525,16 @@
       }
     }
 
-    // Capture: draw video frame onto canvas, replicating object-fit:cover
+    // Retake: restore live view
+    function retake() {
+      snapshot.style.display   = 'none';
+      guide.style.display      = '';
+      captureBtn.style.display = '';
+      actionBtns.classList.remove('show');
+      analyzeBtn.disabled = true;
+    }
+
+    // ── Capture: enable Analyze once photo is taken ──────
     function capture() {
       const cw = video.clientWidth;
       const ch = video.clientHeight;
@@ -433,19 +554,124 @@
       guide.style.display      = 'none';
       captureBtn.style.display = 'none';
       actionBtns.classList.add('show');
-    }
-
-    // Retake: restore live view
-    function retake() {
-      snapshot.style.display   = 'none';
-      guide.style.display      = '';
-      captureBtn.style.display = '';
-      actionBtns.classList.remove('show');
+      analyzeBtn.disabled = false;
     }
 
     captureBtn.addEventListener('click', capture);
     retakeBtn.addEventListener('click', retake);
-    analyzeBtn.addEventListener('click', () => alert('AI coming soon'));
+
+    // ── Gemini API ────────────────────────────────────────
+    const GEMINI_API_KEY = 'PASTE_YOUR_KEY_HERE';
+    const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+
+    function getSection() {
+      return document.querySelector('.tab-btn.active').dataset.section;
+    }
+
+    function buildPrompt(section) {
+      return `You are reading a library bookshelf photo. List every book spine visible, left to right.
+Return ONLY valid JSON — an array of objects with these fields: position, title, author_last, call_number, confidence.
+Section type: ${section.toUpperCase()}
+If a field is unreadable, use null. Do not guess. Confidence should be "high", "medium", or "low".
+Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":null,"confidence":"high"}]`;
+    }
+
+    async function analyzeShelf() {
+      analyzeBtn.disabled = true;
+      analyzeBtn.textContent = 'Analyzing…';
+
+      const imageData = snapshot.toDataURL('image/jpeg', 0.9).split(',')[1];
+      const section   = getSection();
+
+      try {
+        const res = await fetch(GEMINI_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { text: buildPrompt(section) },
+                { inline_data: { mime_type: 'image/jpeg', data: imageData } }
+              ]
+            }]
+          })
+        });
+
+        if (!res.ok) throw new Error(`API error ${res.status}`);
+
+        const json = await res.json();
+        const raw  = json.candidates[0].content.parts[0].text;
+
+        // Strip markdown code fences if present
+        const cleaned = raw.replace(/```json|```/g, '').trim();
+        const books   = JSON.parse(cleaned);
+
+        showResults(books, section);
+      } catch (err) {
+        alert('Something went wrong: ' + err.message);
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = 'Analyze';
+      }
+    }
+
+    // ── Ordering logic ────────────────────────────────────
+    function checkOrder(books, section) {
+      return books.map((book, i) => {
+        if (i === 0) return { ...book, outOfOrder: false };
+        const prev = books[i - 1];
+
+        if (section === 'fiction') {
+          const a = (prev.author_last || '').toLowerCase();
+          const b = (book.author_last || '').toLowerCase();
+          const outOfOrder = b < a || (b === a && (book.title || '').toLowerCase() < (prev.title || '').toLowerCase());
+          return { ...book, outOfOrder };
+        } else {
+          const a = parseFloat(prev.call_number) || 0;
+          const b = parseFloat(book.call_number) || 0;
+          const outOfOrder = b < a || (b === a && (book.author_last || '').toLowerCase() < (prev.author_last || '').toLowerCase());
+          return { ...book, outOfOrder };
+        }
+      });
+    }
+
+    // ── Results screen ────────────────────────────────────
+    function showResults(books, section) {
+      const checked = checkOrder(books, section);
+      const outCount = checked.filter(b => b.outOfOrder).length;
+
+      const resultsHtml = `
+        <div class="results-screen" id="resultsScreen">
+          <div class="results-header">
+            <span class="results-title">${checked.length} books found</span>
+            <span class="results-badge ${outCount > 0 ? 'badge-warn' : 'badge-ok'}">
+              ${outCount > 0 ? `${outCount} out of order` : 'All in order'}
+            </span>
+          </div>
+          <ul class="book-list">
+            ${checked.map(b => `
+              <li class="book-item ${b.outOfOrder ? 'out-of-order' : ''}">
+                <span class="book-pos">${b.position}</span>
+                <div class="book-info">
+                  <span class="book-title">${b.title || '—'}</span>
+                  <span class="book-meta">${b.author_last || '—'}${b.call_number ? ' · ' + b.call_number : ''} · <span class="conf-${b.confidence}">${b.confidence}</span></span>
+                </div>
+                ${b.outOfOrder ? '<span class="out-tag">Out of order</span>' : ''}
+              </li>`).join('')}
+          </ul>
+          <button class="btn-new-scan" onclick="newScan()">New Scan</button>
+        </div>`;
+
+      document.querySelector('.camera-wrap').insertAdjacentHTML('beforeend', resultsHtml);
+      document.querySelector('.footer').style.display = 'none';
+    }
+
+    function newScan() {
+      document.getElementById('resultsScreen')?.remove();
+      document.querySelector('.footer').style.display = '';
+      retake();
+    }
+
+    analyzeBtn.addEventListener('click', analyzeShelf);
 
     startCameraBtn.addEventListener('click', async () => {
       startCameraBtn.textContent = 'Starting…';
