@@ -344,6 +344,17 @@
       color: #cbd5e1;
       text-align: center;
     }
+    .bi-move {
+      margin-top: 8px;
+      padding: 10px 12px;
+      background: #1e3a8a;
+      border-radius: 8px;
+      color: #dbeafe;
+      font-size: 12.5px;
+      line-height: 1.45;
+      text-align: center;
+    }
+    .bi-move b { color: #fff; }
     .bi-close {
       position: absolute;
       top: 6px;
@@ -641,7 +652,8 @@ For each spine, return:
 - title: as printed on the spine, or null if unreadable
 - author_last: author's last name only, or null
 - call_number: Dewey number (for nonfiction), or null
-- spine_label: the text printed on the white library sticker at the BOTTOM of the spine (e.g. "KIN" for a Stephen King novel, or "973.7 HAR" for nonfiction). This is the actual filing key the library uses. If no sticker is visible, return null.
+- spine_label: the FULL text printed on the white library sticker at the BOTTOM of the spine. Include the cutter/author code AND the series name and volume number if visible. Examples: "KIN", "973.7 HAR", "BLACK, Cara, Leduc 5", "PATTERSON, Maximum Ride 3". If no sticker is visible, return null.
+- series_volume: if the spine or label shows a numbered series volume (e.g. "Leduc 5", "Book 3", "Vol. 7", "#2"), return the volume as an INTEGER. Otherwise null. In a series, libraries sort by volume number, NOT by title.
 - confidence: "high" | "medium" | "low" based on how clearly you can read the spine
 - bounding_box: [ymin, xmin, ymax, xmax] in normalized 0-1000 coordinates (0,0 = top-left)
 
@@ -656,7 +668,7 @@ CRITICAL bounding box rules:
 
 ${sectionInstruction}
 Return ONLY valid JSON. Use null for unreadable fields — never guess.
-Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":null,"spine_label":"HER","confidence":"high","bounding_box":[80,50,920,140]}]`;
+Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_number":null,"spine_label":"BLACK, Cara, Leduc 5","series_volume":5,"confidence":"high","bounding_box":[80,50,920,140]}]`;
     }
 
     // Enhance image: contrast/saturation/brightness (GPU filter) + 3×3 sharpening
@@ -823,53 +835,88 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
       return { num, cut, prefix: m[1].toLowerCase() };
     }
 
+    // Pull a numeric series volume from either the explicit field or a parse of the label.
+    function extractVolume(book) {
+      if (typeof book.series_volume === 'number' && isFinite(book.series_volume)) {
+        return book.series_volume;
+      }
+      // Fallback: look for a trailing number in spine_label like "Leduc 5" or "#3"
+      if (book.spine_label) {
+        const m = String(book.spine_label).match(/(\d+)\s*$/);
+        if (m) return parseInt(m[1], 10);
+      }
+      return null;
+    }
+
+    // For an author-style spine label like "BLACK, Cara, Leduc 5" the normalized
+    // primary key is just the author cutter — we drop the series name + volume so
+    // that all books by the same author tie at the primary level. The volume is
+    // returned separately as the secondary key.
+    function normalizeLabelToAuthor(s) {
+      if (!s) return null;
+      const noVol = String(s).replace(/\s*\d+\s*$/, '');     // strip trailing volume
+      const noSeries = noVol.replace(/,\s*[^,]+$/, '');       // strip trailing series name after second comma
+      return normalizeAuthor(noSeries);
+    }
+
     // Build a comparable sort key for a book given the chosen section.
     // Returns null when there's no trustworthy signal (→ rendered yellow).
+    // Keys may carry a `vol` field used as a tiebreaker (series ordering).
     function sortKey(book, section) {
-      // Confidence-aware fallback: if we'd be relying purely on a low-confidence
-      // OCR'd author, treat as unverifiable instead of producing a false flag.
       const lowConfNoLabel = book.confidence === 'low' && !book.spine_label;
+      const vol = extractVolume(book);
 
       if (section === 'fiction') {
-        if (book.spine_label) return { kind: 'str', val: book.spine_label.toLowerCase() };
+        if (book.spine_label) {
+          const n = normalizeLabelToAuthor(book.spine_label) || book.spine_label.toLowerCase();
+          return { kind: 'str', val: n, vol };
+        }
         if (lowConfNoLabel) return null;
         const n = normalizeAuthor(book.author_last);
-        return n ? { kind: 'str', val: n } : null;
+        return n ? { kind: 'str', val: n, vol } : null;
       }
 
       if (section === 'nonfiction') {
         const d = parseDewey(book.spine_label) || parseDewey(book.call_number);
-        return d ? { kind: 'dewey', val: d } : null;
+        return d ? { kind: 'dewey', val: d, vol } : null;
       }
 
       // auto: spine_label > Dewey-shaped call_number > author_last
       if (book.spine_label) {
         const d = parseDewey(book.spine_label);
-        return d && d.num !== null
-          ? { kind: 'dewey', val: d }
-          : { kind: 'str', val: book.spine_label.toLowerCase() };
+        if (d && d.num !== null) return { kind: 'dewey', val: d, vol };
+        const n = normalizeLabelToAuthor(book.spine_label) || book.spine_label.toLowerCase();
+        return { kind: 'str', val: n, vol };
       }
       if (book.call_number && /^\s*\d/.test(book.call_number)) {
         const d = parseDewey(book.call_number);
-        if (d) return { kind: 'dewey', val: d };
+        if (d) return { kind: 'dewey', val: d, vol };
       }
       if (lowConfNoLabel) return null;
       const n = normalizeAuthor(book.author_last);
-      return n ? { kind: 'str', val: n } : null;
+      return n ? { kind: 'str', val: n, vol } : null;
     }
 
     // Compare two sort keys. Returns <0, 0, >0.
+    // Primary by kind/value, secondary by series volume (numeric).
     function compareKeys(a, b) {
       // Mixed kinds (one Dewey, one author string) — Dewey-shaped sorts first
       // to match how libraries shelve (prefix nonfiction before fiction within a section).
       if (a.kind !== b.kind) return a.kind === 'dewey' ? -1 : 1;
-      if (a.kind === 'str') return a.val.localeCompare(b.val, undefined, { sensitivity: 'base' });
-      // Dewey
-      const A = a.val, B = b.val;
-      const an = A.num === null ? -Infinity : A.num;
-      const bn = B.num === null ? -Infinity : B.num;
-      if (an !== bn) return an - bn;
-      return A.cut.localeCompare(B.cut, undefined, { sensitivity: 'base' });
+      let primary;
+      if (a.kind === 'str') {
+        primary = a.val.localeCompare(b.val, undefined, { sensitivity: 'base' });
+      } else {
+        const A = a.val, B = b.val;
+        const an = A.num === null ? -Infinity : A.num;
+        const bn = B.num === null ? -Infinity : B.num;
+        primary = an !== bn ? an - bn : A.cut.localeCompare(B.cut, undefined, { sensitivity: 'base' });
+      }
+      if (primary !== 0) return primary;
+      // Tie on primary → break by series volume number (nulls sort last)
+      const av = a.vol == null ?  Infinity : a.vol;
+      const bv = b.vol == null ?  Infinity : b.vol;
+      return av - bv;
     }
 
     // Longest non-decreasing subsequence of indices in `keys` (O(n²) DP, n is small).
@@ -1078,14 +1125,18 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
 
       checked.forEach(book => {
         if (!book.bounding_box) return;
+        // Only highlight books that need attention. In-order books get no box at
+        // all so the photo stays readable; tap anywhere on a spine to inspect.
+        if (!book.outOfOrder && !book.unverifiable) return;
+
         const [ymin, xmin, ymax, xmax] = book.bounding_box;
         const x = (xmin / 1000) * W;
         const y = (ymin / 1000) * H;
         const w = ((xmax - xmin) / 1000) * W;
         const h = ((ymax - ymin) / 1000) * H;
 
-        // Three-state color: red = out of order, yellow = unverifiable, green = ok
-        const color = book.outOfOrder ? '#ef4444' : book.unverifiable ? '#facc15' : '#22c55e';
+        // Two-state color: red = out of order, yellow = unverifiable
+        const color = book.outOfOrder ? '#ef4444' : '#facc15';
 
         ctx.strokeStyle = color;
         ctx.lineWidth   = Math.max(3, W / 250);
@@ -1209,9 +1260,23 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
       if (!best) return;
 
       const confColor = best.confidence === 'high' ? '#4ade80' : best.confidence === 'medium' ? '#facc15' : '#f87171';
-      const status = best.unverifiable ? 'Unverifiable'
-                   : best.outOfOrder    ? `Should be at shelf position ${best.idealPosition}`
-                   :                       'In order';
+
+      // Build a "where to move" message for red books.
+      // Find the book currently sitting at the ideal shelf-position so we can name it.
+      let moveText = null;
+      if (best.outOfOrder && best.idealPosition && best.shelfPosition) {
+        const shelfMates = lastCheckedBooks.filter(b => b.shelfSize === best.shelfSize && b.shelfPosition);
+        const dest = shelfMates.find(b => b.shelfPosition === best.idealPosition);
+        const destName = dest
+          ? (dest.title || dest.spine_label || (dest.author_last && `${dest.author_last}'s book`) || `the book at position ${best.idealPosition}`)
+          : `position ${best.idealPosition}`;
+        const direction = best.idealPosition < best.shelfPosition ? 'left' : 'right';
+        moveText = `Move ${direction} — place before <b>${escapeHtml(String(destName))}</b> (currently #${best.idealPosition} on this shelf).`;
+      }
+
+      const status = best.unverifiable ? 'Couldn\'t read this spine clearly — not sure if it\'s in order.'
+                   : best.outOfOrder    ? `Out of order — should be at shelf position ${best.idealPosition}.`
+                   :                       '✓ In order';
 
       const card = document.createElement('div');
       card.id = 'bookInspect';
@@ -1220,9 +1285,11 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
         <div class="bi-row"><span class="bi-key">Title</span><span class="bi-val">${escapeHtml(best.title) || '—'}</span></div>
         <div class="bi-row"><span class="bi-key">Author</span><span class="bi-val">${escapeHtml(best.author_last) || '—'}</span></div>
         <div class="bi-row"><span class="bi-key">Label</span><span class="bi-val">${escapeHtml(best.spine_label || best.call_number) || '—'}</span></div>
+        ${best.series_volume != null ? `<div class="bi-row"><span class="bi-key">Volume</span><span class="bi-val">#${best.series_volume}</span></div>` : ''}
         <div class="bi-row"><span class="bi-key">Confidence</span><span class="bi-val"><span class="bi-dot" style="background:${confColor}"></span>${best.confidence || '—'}</span></div>
         <div class="bi-row"><span class="bi-key">Position</span><span class="bi-val">${best.shelfPosition ?? '—'} of ${best.shelfSize ?? '—'} on this shelf</span></div>
         <div class="bi-status">${status}</div>
+        ${moveText ? `<div class="bi-move">${moveText}</div>` : ''}
         <button class="bi-close" aria-label="Close">×</button>`;
       cameraWrap.appendChild(card);
       card.querySelector('.bi-close').addEventListener('click', () => card.remove());
