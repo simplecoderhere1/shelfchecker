@@ -90,8 +90,9 @@
 
     #snapshot {
       position: absolute;
-      top: 0;
-      left: 0;
+      inset: 0;
+      width: 100%;
+      height: 100%;
       display: none;
     }
 
@@ -112,11 +113,9 @@
       border: 1.5px solid rgba(255, 255, 255, 0.35);
       border-radius: 6px;
       position: relative;
-      /* darken outside the frame */
       box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.30);
     }
 
-    /* Four corner accents: guide-box::before/::after + inner <i>::before/::after */
     .guide-box::before {
       content: '';
       position: absolute;
@@ -186,6 +185,73 @@
     }
     .cam-error.show { display: flex; }
     .cam-error p { font-size: 14px; line-height: 1.65; max-width: 260px; }
+
+    /* Zoom indicator */
+    .zoom-indicator {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 15;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      font-size: 18px;
+      font-weight: 700;
+      padding: 8px 18px;
+      border-radius: 20px;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    }
+
+    /* Capture flash */
+    @keyframes flash {
+      0%   { opacity: 0.7; }
+      100% { opacity: 0; }
+    }
+    .capture-flash {
+      position: absolute;
+      inset: 0;
+      background: #fff;
+      pointer-events: none;
+      z-index: 18;
+      animation: flash 0.25s ease-out forwards;
+    }
+
+    /* Results overlay */
+    .results-overlay {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 20;
+      padding: 20px 16px;
+      background: linear-gradient(transparent, rgba(0,0,0,0.85));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .overlay-badge {
+      font-size: 14px;
+      font-weight: 700;
+      padding: 8px 14px;
+      border-radius: 20px;
+    }
+    .badge-ok   { background: #14532d; color: #4ade80; }
+    .badge-warn { background: #450a0a; color: #f87171; }
+
+    .btn-new-scan {
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      background: #2563eb;
+      color: #fff;
+    }
 
     /* ── Footer ──────────────────────────────────────── */
 
@@ -257,227 +323,6 @@
       cursor: not-allowed;
       transform: none;
     }
-
-    /* ── Focus label ─────────────────────────────────── */
-    .focus-label {
-      display: none;
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      z-index: 15;
-      background: rgba(0,0,0,0.6);
-      color: #fff;
-      font-size: 15px;
-      font-weight: 600;
-      padding: 10px 20px;
-      border-radius: 20px;
-      letter-spacing: 0.04em;
-      pointer-events: none;
-    }
-
-    /* ── Results overlay ─────────────────────────────── */
-    .results-overlay {
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      z-index: 20;
-      padding: 20px 16px;
-      background: linear-gradient(transparent, rgba(0,0,0,0.85));
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-    }
-
-    .overlay-badge {
-      font-size: 14px;
-      font-weight: 700;
-      padding: 8px 14px;
-      border-radius: 20px;
-    }
-    .badge-ok   { background: #14532d; color: #4ade80; }
-    .badge-warn { background: #450a0a; color: #f87171; }
-
-    .btn-new-scan {
-      padding: 10px 20px;
-      border-radius: 10px;
-      font-size: 14px;
-      font-weight: 600;
-      border: none;
-      cursor: pointer;
-      background: #2563eb;
-      color: #fff;
-    }
-
-    /* ── Camera permission screen ────────────────────── */
-    .permission-screen {
-      position: absolute;
-      inset: 0;
-      z-index: 30;
-      background: #111;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 20px;
-      padding: 40px;
-      text-align: center;
-    }
-    .permission-screen.hidden { display: none; }
-
-    .permission-icon {
-      width: 72px;
-      height: 72px;
-      border-radius: 50%;
-      background: #1e2a3a;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .permission-title {
-      font-size: 20px;
-      font-weight: 600;
-      color: #f0f0f0;
-    }
-
-    .permission-desc {
-      font-size: 14px;
-      color: #888;
-      line-height: 1.6;
-      max-width: 260px;
-    }
-
-    .btn-start-camera {
-      margin-top: 8px;
-      padding: 15px 36px;
-      border-radius: 12px;
-      font-size: 16px;
-      font-weight: 600;
-      border: none;
-      cursor: pointer;
-      background: #2563eb;
-      color: #fff;
-      transition: transform 0.1s ease, background 0.1s ease;
-    }
-    .btn-start-camera:active {
-      transform: scale(0.96);
-      background: #1d4ed8;
-    }
-
-    /* ── Results screen ──────────────────────────────────── */
-    .results-screen {
-      position: absolute;
-      inset: 0;
-      z-index: 25;
-      background: #0d0d0d;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    .results-header {
-      flex-shrink: 0;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 16px;
-      border-bottom: 1px solid #2c2c2c;
-    }
-
-    .results-title {
-      font-size: 15px;
-      font-weight: 600;
-      color: #e0e0e0;
-    }
-
-    .results-badge {
-      font-size: 12px;
-      font-weight: 600;
-      padding: 4px 10px;
-      border-radius: 20px;
-    }
-    .badge-ok   { background: #14532d; color: #4ade80; }
-    .badge-warn { background: #450a0a; color: #f87171; }
-
-    .book-list {
-      flex: 1;
-      overflow-y: auto;
-      list-style: none;
-      padding: 8px 0;
-    }
-
-    .book-item {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 12px 16px;
-      border-bottom: 1px solid #1e1e1e;
-    }
-    .book-item.out-of-order { background: #1a0a0a; }
-
-    .book-pos {
-      flex-shrink: 0;
-      width: 24px;
-      height: 24px;
-      border-radius: 50%;
-      background: #2c2c2c;
-      color: #888;
-      font-size: 11px;
-      font-weight: 600;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .out-of-order .book-pos { background: #7f1d1d; color: #fca5a5; }
-
-    .book-info {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-      min-width: 0;
-    }
-
-    .book-title {
-      font-size: 14px;
-      font-weight: 500;
-      color: #e0e0e0;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .book-meta {
-      font-size: 12px;
-      color: #666;
-    }
-
-    .conf-high   { color: #4ade80; }
-    .conf-medium { color: #facc15; }
-    .conf-low    { color: #f87171; }
-
-    .out-tag {
-      flex-shrink: 0;
-      font-size: 11px;
-      font-weight: 600;
-      color: #f87171;
-    }
-
-    .btn-new-scan {
-      flex-shrink: 0;
-      margin: 16px;
-      padding: 14px;
-      border-radius: 12px;
-      font-size: 15px;
-      font-weight: 600;
-      border: none;
-      cursor: pointer;
-      background: #2563eb;
-      color: #fff;
-    }
   </style>
 </head>
 <body>
@@ -490,25 +335,10 @@
     </div>
   </header>
 
-  <div class="camera-wrap">
+  <div class="camera-wrap" id="cameraWrap">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="snapshot"></canvas>
-
-    <div class="permission-screen" id="permissionScreen">
-      <div class="permission-icon">
-        <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24"
-             fill="none" stroke="#2563eb" stroke-width="1.6"
-             stroke-linecap="round" stroke-linejoin="round">
-          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-          <circle cx="12" cy="13" r="4"/>
-        </svg>
-      </div>
-      <p class="permission-title">Camera Access Needed</p>
-      <p class="permission-desc">ShelfCheck uses your camera to photograph book spines. Your photos are never stored.</p>
-      <button class="btn-start-camera" id="startCameraBtn">Allow Camera</button>
-    </div>
-
-    <div class="focus-label" id="focusLabel">Focusing…</div>
+    <div class="zoom-indicator" id="zoomIndicator"></div>
 
     <div class="guide" id="guide">
       <div class="guide-box">
@@ -539,16 +369,16 @@
   </footer>
 
   <script>
-    const video            = document.getElementById('video');
-    const snapshot         = document.getElementById('snapshot');
-    const captureBtn       = document.getElementById('captureBtn');
-    const actionBtns       = document.getElementById('actionBtns');
-    const retakeBtn        = document.getElementById('retakeBtn');
-    const analyzeBtn       = document.getElementById('analyzeBtn');
-    const guide            = document.getElementById('guide');
-    const camError         = document.getElementById('camError');
-    const permissionScreen = document.getElementById('permissionScreen');
-    const startCameraBtn   = document.getElementById('startCameraBtn');
+    const video       = document.getElementById('video');
+    const snapshot    = document.getElementById('snapshot');
+    const captureBtn  = document.getElementById('captureBtn');
+    const actionBtns  = document.getElementById('actionBtns');
+    const retakeBtn   = document.getElementById('retakeBtn');
+    const analyzeBtn  = document.getElementById('analyzeBtn');
+    const guide       = document.getElementById('guide');
+    const camError    = document.getElementById('camError');
+    const cameraWrap  = document.getElementById('cameraWrap');
+    const zoomIndicator = document.getElementById('zoomIndicator');
 
     // Section toggle
     document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -558,7 +388,11 @@
       });
     });
 
-    // Start rear-facing camera
+    // ── Camera + zoom setup ───────────────────────────────
+    let videoTrack = null;
+    let zoomCaps   = null;
+    let currentZoom = 1;
+
     async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -570,61 +404,102 @@
           audio: false,
         });
         video.srcObject = stream;
+        videoTrack = stream.getVideoTracks()[0];
+        const caps = videoTrack.getCapabilities?.() || {};
+        if (caps.zoom) {
+          zoomCaps    = caps.zoom;
+          currentZoom = caps.zoom.min || 1;
+        }
       } catch {
-        permissionScreen.classList.add('hidden');
-        video.style.display      = 'none';
-        guide.style.display      = 'none';
+        video.style.display = 'none';
+        guide.style.display = 'none';
         camError.classList.add('show');
         captureBtn.disabled      = true;
         captureBtn.style.opacity = '0.35';
       }
     }
 
-    // Retake: restore live view
+    // ── Pinch to zoom ─────────────────────────────────────
+    let lastPinchDist = null;
+    let zoomHideTimer = null;
+
+    function getPinchDist(touches) {
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function showZoom(zoom) {
+      zoomIndicator.textContent = zoom.toFixed(1) + '×';
+      zoomIndicator.style.opacity = '1';
+      clearTimeout(zoomHideTimer);
+      zoomHideTimer = setTimeout(() => zoomIndicator.style.opacity = '0', 1500);
+    }
+
+    cameraWrap.addEventListener('touchstart', e => {
+      if (e.touches.length === 2) lastPinchDist = getPinchDist(e.touches);
+    }, { passive: true });
+
+    cameraWrap.addEventListener('touchmove', e => {
+      if (e.touches.length !== 2 || lastPinchDist === null) return;
+      const dist  = getPinchDist(e.touches);
+      const delta = dist / lastPinchDist;
+      lastPinchDist = dist;
+
+      if (zoomCaps && videoTrack) {
+        currentZoom = Math.min(zoomCaps.max, Math.max(zoomCaps.min, currentZoom * delta));
+        videoTrack.applyConstraints({ advanced: [{ zoom: currentZoom }] }).catch(() => {});
+        showZoom(currentZoom);
+      }
+    }, { passive: true });
+
+    cameraWrap.addEventListener('touchend', e => {
+      if (e.touches.length < 2) lastPinchDist = null;
+    }, { passive: true });
+
+    // ── Capture: instant shot with flash ─────────────────
+    function capture() {
+      const cw  = cameraWrap.clientWidth;
+      const ch  = cameraWrap.clientHeight;
+      const dpr = window.devicePixelRatio || 1;
+      const vw  = video.videoWidth  || cw;
+      const vh  = video.videoHeight || ch;
+
+      // Draw at display-pixel resolution (sharp on retina)
+      snapshot.width  = Math.round(cw * dpr);
+      snapshot.height = Math.round(ch * dpr);
+
+      const scale = Math.max(snapshot.width / vw, snapshot.height / vh);
+      const sw = vw * scale;
+      const sh = vh * scale;
+      snapshot.getContext('2d').drawImage(
+        video,
+        (snapshot.width  - sw) / 2,
+        (snapshot.height - sh) / 2,
+        sw, sh
+      );
+
+      // Flash animation
+      const flash = document.createElement('div');
+      flash.className = 'capture-flash';
+      cameraWrap.appendChild(flash);
+      flash.addEventListener('animationend', () => flash.remove());
+
+      snapshot.style.display   = 'block';
+      guide.style.display      = 'none';
+      captureBtn.style.display = 'none';
+      actionBtns.classList.add('show');
+      analyzeBtn.disabled = false;
+    }
+
+    // ── Retake ────────────────────────────────────────────
     function retake() {
       snapshot.style.display   = 'none';
       guide.style.display      = '';
       captureBtn.style.display = '';
       actionBtns.classList.remove('show');
-      analyzeBtn.disabled = true;
-    }
-
-    // ── Capture: focus delay → full-res shot ─────────────
-    function capture() {
-      // Hide guide immediately, show focusing state
-      guide.style.display      = 'none';
-      captureBtn.style.display = 'none';
-      captureBtn.disabled      = true;
-
-      const focusLabel = document.getElementById('focusLabel');
-      focusLabel.style.display = 'block';
-
-      // Wait for camera to autofocus
-      setTimeout(() => {
-        focusLabel.style.display = 'none';
-
-        // Capture at native video resolution for sharpness
-        const vw = video.videoWidth  || video.clientWidth;
-        const vh = video.videoHeight || video.clientHeight;
-
-        snapshot.width  = vw;
-        snapshot.height = vh;
-        snapshot.getContext('2d').drawImage(video, 0, 0, vw, vh);
-
-        // Scale canvas display to fill container like object-fit:cover
-        const cw = video.clientWidth;
-        const ch = video.clientHeight;
-        const scale = Math.max(cw / vw, ch / vh);
-        snapshot.style.width    = Math.round(vw * scale) + 'px';
-        snapshot.style.height   = Math.round(vh * scale) + 'px';
-        snapshot.style.top      = Math.round((ch - vh * scale) / 2) + 'px';
-        snapshot.style.left     = Math.round((cw - vw * scale) / 2) + 'px';
-        snapshot.style.display  = 'block';
-
-        actionBtns.classList.add('show');
-        analyzeBtn.disabled = false;
-        captureBtn.disabled = false;
-      }, 800);
+      analyzeBtn.disabled      = true;
+      analyzeBtn.textContent   = 'Analyze';
     }
 
     captureBtn.addEventListener('click', capture);
@@ -648,10 +523,10 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
     }
 
     async function analyzeShelf() {
-      analyzeBtn.disabled = true;
+      analyzeBtn.disabled    = true;
       analyzeBtn.textContent = 'Analyzing…';
 
-      const imageData = snapshot.toDataURL('image/jpeg', 0.9).split(',')[1];
+      const imageData = snapshot.toDataURL('image/jpeg', 0.92).split(',')[1];
       const section   = getSection();
 
       try {
@@ -674,17 +549,15 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
           throw new Error(`API error ${res.status}: ${errText.slice(0, 200)}`);
         }
 
-        const json = await res.json();
-        const raw  = json.candidates[0].content.parts[0].text;
-
-        // Strip markdown code fences if present
+        const json    = await res.json();
+        const raw     = json.candidates[0].content.parts[0].text;
         const cleaned = raw.replace(/```json|```/g, '').trim();
         const books   = JSON.parse(cleaned);
 
         showResults(books, section);
       } catch (err) {
         alert('Something went wrong: ' + err.message);
-        analyzeBtn.disabled = false;
+        analyzeBtn.disabled    = false;
         analyzeBtn.textContent = 'Analyze';
       }
     }
@@ -711,10 +584,9 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
 
     // ── Results: draw boxes on photo + overlay summary ────
     function showResults(books, section) {
-      const checked = checkOrder(books, section);
+      const checked  = checkOrder(books, section);
       const outCount = checked.filter(b => b.outOfOrder).length;
 
-      // Draw bounding boxes on the canvas
       const ctx = snapshot.getContext('2d');
       const W   = snapshot.width;
       const H   = snapshot.height;
@@ -729,39 +601,35 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
 
         const color = book.outOfOrder ? '#ef4444' : '#22c55e';
 
-        // Box
         ctx.strokeStyle = color;
-        ctx.lineWidth   = Math.max(3, W / 200);
+        ctx.lineWidth   = Math.max(3, W / 250);
         ctx.strokeRect(x, y, w, h);
 
-        // Label pill
-        const fontSize  = Math.max(16, W / 50);
-        const pillW     = fontSize * 1.8;
-        const pillH     = fontSize * 1.4;
-        ctx.fillStyle   = color;
+        const fontSize = Math.max(18, W / 55);
+        const pillW    = fontSize * 1.8;
+        const pillH    = fontSize * 1.4;
+        ctx.fillStyle  = color;
         ctx.beginPath();
         ctx.roundRect(x, y - pillH, pillW, pillH, 4);
         ctx.fill();
 
-        ctx.fillStyle  = '#fff';
-        ctx.font       = `bold ${fontSize}px sans-serif`;
-        ctx.textAlign  = 'center';
+        ctx.fillStyle = '#fff';
+        ctx.font      = `bold ${fontSize}px sans-serif`;
+        ctx.textAlign = 'center';
         ctx.fillText(book.position, x + pillW / 2, y - pillH / 4);
-        ctx.textAlign  = 'left';
+        ctx.textAlign = 'left';
       });
 
-      // Floating summary overlay
       const overlay = document.createElement('div');
-      overlay.id = 'resultsOverlay';
+      overlay.id        = 'resultsOverlay';
       overlay.className = 'results-overlay';
       overlay.innerHTML = `
         <div class="overlay-badge ${outCount > 0 ? 'badge-warn' : 'badge-ok'}">
           ${outCount > 0 ? `⚠ ${outCount} out of order` : '✓ All in order'}
         </div>
         <button class="btn-new-scan" onclick="newScan()">New Scan</button>`;
-      document.querySelector('.camera-wrap').appendChild(overlay);
+      cameraWrap.appendChild(overlay);
 
-      // Hide analyze/retake, keep overlay controls
       actionBtns.classList.remove('show');
     }
 
@@ -772,12 +640,8 @@ Example: [{"position":1,"title":"Dune","author_last":"Herbert","call_number":nul
 
     analyzeBtn.addEventListener('click', analyzeShelf);
 
-    startCameraBtn.addEventListener('click', async () => {
-      startCameraBtn.textContent = 'Starting…';
-      startCameraBtn.disabled = true;
-      await startCamera();
-      permissionScreen.classList.add('hidden');
-    });
+    // Auto-start camera on load
+    startCamera();
   </script>
 
 </body>
