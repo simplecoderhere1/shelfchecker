@@ -913,8 +913,10 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       return dst;
     }
 
-    // Resize snapshot to max 1280px on long side, JPEG quality 0.78, then enhance
-    function getResizedImageData(maxDim = 1280, quality = 0.78) {
+    // Resize snapshot to max 1920px on long side, JPEG quality 0.82, then enhance.
+    // Higher resolution gives Gemini more detail per spine, especially important
+    // when photographing a full column of multiple shelves at once.
+    function getResizedImageData(maxDim = 1920, quality = 0.82) {
       const W = snapshot.width;
       const H = snapshot.height;
       const scale = Math.min(1, maxDim / Math.max(W, H));
