@@ -90,14 +90,11 @@
 
     #snapshot {
       position: absolute;
-      left: 7%;
-      top: 50%;
-      transform: translateY(-50%);
-      width: 86%;
-      aspect-ratio: 16 / 6;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
       display: none;
-      background: #000;
-      border-radius: 6px;
     }
 
     /* Guide overlay */
@@ -112,8 +109,8 @@
     }
 
     .guide-box {
-      width: 86%;
-      aspect-ratio: 16 / 6;
+      width: 94%;
+      aspect-ratio: 3 / 4;
       border: 1.5px solid rgba(255, 255, 255, 0.35);
       border-radius: 6px;
       position: relative;
@@ -469,10 +466,10 @@
       const vw  = video.videoWidth  || cw;
       const vh  = video.videoHeight || ch;
 
-      // Guide box dimensions in screen coords (matches CSS: width 86%, aspect 16:6)
-      const gwScreen = cw * 0.86;
-      const ghScreen = gwScreen * 6 / 16;
-      const gxScreen = cw * 0.07;
+      // Guide box dimensions in screen coords (matches CSS: width 94%, aspect 3:4)
+      const gwScreen = cw * 0.94;
+      const ghScreen = gwScreen * 4 / 3;
+      const gxScreen = cw * 0.03;
       const gyScreen = (ch - ghScreen) / 2;
 
       // Video is displayed with object-fit:cover — map screen back to video coords
