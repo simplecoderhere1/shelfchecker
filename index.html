@@ -343,6 +343,39 @@
       border-top-color: #facc15;
     }
 
+    /* Persistent yellow "?" markers for unverifiable books — always visible */
+    .unv-markers-wrap {
+      position: absolute;
+      inset: 0;
+      z-index: 21;
+      pointer-events: none;
+    }
+    .unv-marker {
+      position: absolute;
+      transform: translate(-50%, -100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      filter: drop-shadow(0 2px 5px rgba(0,0,0,0.45));
+    }
+    .unv-marker-pill {
+      background: #facc15;
+      color: #1a1a1a;
+      font-weight: 800;
+      font-size: 13px;
+      padding: 4px 9px;
+      border-radius: 12px;
+      line-height: 1.1;
+    }
+    .unv-marker-tip {
+      width: 0;
+      height: 0;
+      border-left: 7px solid transparent;
+      border-right: 7px solid transparent;
+      border-top: 10px solid #facc15;
+      margin-top: -1px;
+    }
+
     /* Destination arrow — green, shown below source arrow when "place before X" */
     .step-arrow-dest {
       position: absolute;
@@ -1385,6 +1418,47 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       return [...checkedShelves, ...checkedUngrouped];
     }
 
+    // ── Shared helper: map a bounding box to pixel coords over cameraWrap ──
+    // Used by both renderStep arrows and renderUnverifiableMarkers.
+    function bbToDisplay(bb) {
+      const cw = snapshot.width, ch = snapshot.height;
+      const rect = snapshot.getBoundingClientRect();
+      const wrapRect = cameraWrap.getBoundingClientRect();
+      const dispScale = Math.min(rect.width / cw, rect.height / ch);
+      const dispW = cw * dispScale, dispH = ch * dispScale;
+      const offX = (rect.width  - dispW) / 2 + (rect.left - wrapRect.left);
+      const offY = (rect.height - dispH) / 2 + (rect.top  - wrapRect.top);
+      const [ymin, xmin, , xmax] = bb;
+      const cx = ((xmin + xmax) / 2 / 1000) * cw;
+      const ty = (ymin / 1000) * ch;
+      return {
+        left: offX + cx * dispScale,
+        top:  Math.max(8, offY + ty * dispScale - 4),
+      };
+    }
+
+    // ── Persistent yellow "?" markers for unverifiable books ──
+    function renderUnverifiableMarkers() {
+      document.getElementById('unvMarkers')?.remove();
+      const unvBooks = lastCheckedBooks.filter(b => b.unverifiable && b.bounding_box);
+      if (unvBooks.length === 0) return;
+
+      const wrap = document.createElement('div');
+      wrap.id = 'unvMarkers';
+      wrap.className = 'unv-markers-wrap';
+      cameraWrap.appendChild(wrap);
+
+      for (const book of unvBooks) {
+        const pos = bbToDisplay(book.bounding_box);
+        const marker = document.createElement('div');
+        marker.className = 'unv-marker';
+        marker.style.left = `${pos.left}px`;
+        marker.style.top  = `${pos.top}px`;
+        marker.innerHTML = `<div class="unv-marker-pill">?</div><div class="unv-marker-tip"></div>`;
+        wrap.appendChild(marker);
+      }
+    }
+
     // ── Results: step-through mode (one issue at a time) ─────
     let lastCheckedBooks = [];
     let stepIssues = [];
@@ -1398,20 +1472,20 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       document.getElementById('resultsOverlay')?.remove();
       document.getElementById('stepThrough')?.remove();
 
-      // Issues = books that need attention AND have a bounding_box so we can point at them.
-      // Out-of-order first, then unverifiable.
+      // Step-through only covers out-of-order books. Unverifiable books get
+      // persistent yellow "?" tags rendered on the photo at all times.
       stepIssues = checked
-        .filter(b => b.bounding_box && (b.outOfOrder || b.unverifiable))
-        .sort((a, b) => {
-          if (a.outOfOrder !== b.outOfOrder) return a.outOfOrder ? -1 : 1;
-          return (a.shelfPosition ?? 0) - (b.shelfPosition ?? 0);
-        });
+        .filter(b => b.bounding_box && b.outOfOrder)
+        .sort((a, b) => (a.shelfPosition ?? 0) - (b.shelfPosition ?? 0));
 
       const outCount = checked.filter(b => b.outOfOrder).length;
       const unvCount = checked.filter(b => b.unverifiable).length;
 
       actionBtns.classList.remove('show');
       enableInspect();
+
+      // Render persistent yellow markers for unverifiable books
+      renderUnverifiableMarkers();
 
       if (stepIssues.length === 0) {
         showSimpleBadge(outCount, unvCount);
@@ -1484,30 +1558,10 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       const book = stepIssues[stepCursor];
       if (!book) return;
 
-      // Compute display transform once — used by both source and destination arrows.
-      // snapshot uses object-fit:contain, so we need to account for letterbox offsets.
-      const cw = snapshot.width, ch = snapshot.height;
-      const rect = snapshot.getBoundingClientRect();
-      const wrapRect = cameraWrap.getBoundingClientRect();
-      const dispScale = Math.min(rect.width / cw, rect.height / ch);
-      const dispW = cw * dispScale, dispH = ch * dispScale;
-      const offX = (rect.width  - dispW) / 2 + (rect.left - wrapRect.left);
-      const offY = (rect.height - dispH) / 2 + (rect.top  - wrapRect.top);
-
-      function boxToArrowPos(bb) {
-        const [ymin, xmin, , xmax] = bb;
-        const cx = ((xmin + xmax) / 2 / 1000) * cw;
-        const ty = (ymin / 1000) * ch;
-        return {
-          left: offX + cx * dispScale,
-          top:  Math.max(8, offY + ty * dispScale - 6),
-        };
-      }
-
       // Position the source arrow at this book's X-center, just above its top edge.
       const arrow = document.getElementById('stepArrow');
       if (arrow && book.bounding_box) {
-        const pos = boxToArrowPos(book.bounding_box);
+        const pos = bbToDisplay(book.bounding_box);
         arrow.style.left = `${pos.left}px`;
         arrow.style.top  = `${pos.top}px`;
         arrow.classList.toggle('step-arrow-warn', !!book.outOfOrder);
@@ -1529,7 +1583,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       const destArrow = document.getElementById('stepArrowDest');
       if (destArrow) {
         if (destVisible) {
-          const pos = boxToArrowPos(dest.bounding_box);
+          const pos = bbToDisplay(dest.bounding_box);
           destArrow.style.left = `${pos.left}px`;
           destArrow.style.top  = `${pos.top}px`;
           destArrow.style.display = '';
@@ -1572,9 +1626,10 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       }
     }
 
-    // Reposition the arrow if the viewport changes (rotation, etc).
+    // Reposition arrows and markers if the viewport changes (rotation, etc).
     window.addEventListener('resize', () => {
       if (stepIssues.length > 0 && document.getElementById('stepThrough')) renderStep();
+      if (document.getElementById('unvMarkers')) renderUnverifiableMarkers();
     });
 
     // ── Tap-to-inspect: show OCR readout for the tapped book ──
@@ -1669,6 +1724,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
     function newScan() {
       document.getElementById('resultsOverlay')?.remove();
       document.getElementById('stepThrough')?.remove();
+      document.getElementById('unvMarkers')?.remove();
       stepIssues = [];
       disableInspect();
       retake();
