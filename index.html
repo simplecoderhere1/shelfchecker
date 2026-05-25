@@ -835,6 +835,50 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       return v || null;
     }
 
+    // Reduce a string to its lowercase letters only.
+    function lettersLower(s) {
+      return String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+    }
+
+    // Parse an author-style label into { surname, first }. Handles the common formats:
+    //   "BLACK"                          → { surname:'black', first:'' }
+    //   "BLACK, Benjamin"                → { surname:'black', first:'benjamin' }
+    //   "BLACK, Cara, Leduc 5"           → { surname:'black', first:'cara' }
+    //   "Cara Black" / "Benjamin Black"  → { surname:'black', first:'cara'/'benjamin' }
+    //   "BLACK Benjamin" (no comma)      → { surname:'black', first:'benjamin' }
+    function parseSurnameAndFirst(s) {
+      if (!s) return null;
+      let str = String(s).trim();
+      // Strip a trailing volume number (e.g. "Leduc 5" → "Leduc")
+      str = str.replace(/\s*\d+\s*$/, '').trim();
+      if (!str) return null;
+
+      if (str.includes(',')) {
+        const parts = str.split(',').map(p => p.trim()).filter(Boolean);
+        const surname = lettersLower(parts[0]);
+        const first   = parts[1] ? lettersLower(parts[1]) : '';
+        if (!surname) return null;
+        return { surname, first };
+      }
+
+      const tokens = str.split(/\s+/).filter(Boolean);
+      if (tokens.length === 0) return null;
+      if (tokens.length === 1) {
+        return { surname: lettersLower(tokens[0]), first: '' };
+      }
+      // No comma + multiple tokens. Heuristic: if the first token is ALL CAPS and
+      // the second is Mixed Case, treat as "SURNAME First" (library convention).
+      // Otherwise assume "First Last".
+      const t0 = tokens[0], t1 = tokens[1];
+      if (/^[A-Z]{2,}$/.test(t0) && /^[A-Z][a-z]/.test(t1)) {
+        return { surname: lettersLower(t0), first: lettersLower(t1) };
+      }
+      return {
+        surname: lettersLower(tokens[tokens.length - 1]),
+        first:   lettersLower(tokens.slice(0, -1).join('')),
+      };
+    }
+
     // Parse a Dewey/cutter label like "973.7 HAR" or "KIN"
     function parseDewey(s) {
       if (!s) return null;
@@ -871,62 +915,86 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
 
     // Build a comparable sort key for a book given the chosen section.
     // Returns null when there's no trustworthy signal (→ rendered yellow).
-    // Keys may carry a `vol` field used as a tiebreaker (series ordering).
+    // String keys carry surname (val), first name (first), and series volume (vol).
+    // Comparison is surname → first name → volume (and a title fallback).
     function sortKey(book, section) {
       const lowConfNoLabel = book.confidence === 'low' && !book.spine_label;
       const vol = extractVolume(book);
+      const title = lettersLower((book.title || '').replace(/^the\s+|^a\s+|^an\s+/i, ''));
+
+      function strKeyFromAuthorish(s) {
+        const a = parseSurnameAndFirst(s);
+        return a ? { kind: 'str', val: a.surname, first: a.first, vol, title } : null;
+      }
 
       if (section === 'fiction') {
         if (book.spine_label) {
-          const n = normalizeLabelToAuthor(book.spine_label) || book.spine_label.toLowerCase();
-          return { kind: 'str', val: n, vol };
+          const k = strKeyFromAuthorish(book.spine_label);
+          if (k) return k;
         }
         if (lowConfNoLabel) return null;
-        const n = normalizeAuthor(book.author_last);
-        return n ? { kind: 'str', val: n, vol } : null;
+        return strKeyFromAuthorish(book.author_last);
       }
 
       if (section === 'nonfiction') {
         const d = parseDewey(book.spine_label) || parseDewey(book.call_number);
-        return d ? { kind: 'dewey', val: d, vol } : null;
+        return d ? { kind: 'dewey', val: d, vol, title } : null;
       }
 
       // auto: spine_label > Dewey-shaped call_number > author_last
       if (book.spine_label) {
         const d = parseDewey(book.spine_label);
-        if (d && d.num !== null) return { kind: 'dewey', val: d, vol };
-        const n = normalizeLabelToAuthor(book.spine_label) || book.spine_label.toLowerCase();
-        return { kind: 'str', val: n, vol };
+        if (d && d.num !== null) return { kind: 'dewey', val: d, vol, title };
+        const k = strKeyFromAuthorish(book.spine_label);
+        if (k) return k;
       }
       if (book.call_number && /^\s*\d/.test(book.call_number)) {
         const d = parseDewey(book.call_number);
-        if (d) return { kind: 'dewey', val: d, vol };
+        if (d) return { kind: 'dewey', val: d, vol, title };
       }
       if (lowConfNoLabel) return null;
-      const n = normalizeAuthor(book.author_last);
-      return n ? { kind: 'str', val: n, vol } : null;
+      return strKeyFromAuthorish(book.author_last);
     }
 
     // Compare two sort keys. Returns <0, 0, >0.
-    // Primary by kind/value, secondary by series volume (numeric).
+    // Hierarchy (library filing order):
+    //   1. kind (Dewey before author-string within a section)
+    //   2. primary value (surname / Dewey number+cutter)
+    //   3. first name (within same surname: Benjamin < Cara)
+    //   4. series volume number (within same author: Leduc 5 < Leduc 6; nulls sort last)
+    //   5. title (final tiebreaker for non-series books with same author)
     function compareKeys(a, b) {
-      // Mixed kinds (one Dewey, one author string) — Dewey-shaped sorts first
-      // to match how libraries shelve (prefix nonfiction before fiction within a section).
       if (a.kind !== b.kind) return a.kind === 'dewey' ? -1 : 1;
-      let primary;
+
+      // 2. Primary value
+      let cmp;
       if (a.kind === 'str') {
-        primary = a.val.localeCompare(b.val, undefined, { sensitivity: 'base' });
+        cmp = a.val.localeCompare(b.val, undefined, { sensitivity: 'base' });
       } else {
         const A = a.val, B = b.val;
         const an = A.num === null ? -Infinity : A.num;
         const bn = B.num === null ? -Infinity : B.num;
-        primary = an !== bn ? an - bn : A.cut.localeCompare(B.cut, undefined, { sensitivity: 'base' });
+        cmp = an !== bn ? an - bn : A.cut.localeCompare(B.cut, undefined, { sensitivity: 'base' });
       }
-      if (primary !== 0) return primary;
-      // Tie on primary → break by series volume number (nulls sort last)
-      const av = a.vol == null ?  Infinity : a.vol;
-      const bv = b.vol == null ?  Infinity : b.vol;
-      return av - bv;
+      if (cmp !== 0) return cmp;
+
+      // 3. First name (string keys only; empty string sorts first)
+      if (a.kind === 'str') {
+        const af = a.first || '';
+        const bf = b.first || '';
+        cmp = af.localeCompare(bf, undefined, { sensitivity: 'base' });
+        if (cmp !== 0) return cmp;
+      }
+
+      // 4. Series volume number (nulls sort last so unnumbered books come AFTER series)
+      const av = a.vol == null ? Infinity : a.vol;
+      const bv = b.vol == null ? Infinity : b.vol;
+      if (av !== bv) return av - bv;
+
+      // 5. Title (alphabetical, ignoring leading "the/a/an")
+      const at = a.title || '';
+      const bt = b.title || '';
+      return at.localeCompare(bt, undefined, { sensitivity: 'base' });
     }
 
     // Longest non-decreasing subsequence of indices in `keys` (O(n²) DP, n is small).
