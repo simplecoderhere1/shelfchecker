@@ -730,8 +730,8 @@
       return Math.sqrt(dx * dx + dy * dy);
     }
 
-    function showZoom(zoom) {
-      zoomIndicator.textContent = zoom.toFixed(1) + '×';
+    function showZoom(zoom, atMin) {
+      zoomIndicator.textContent = zoom.toFixed(1) + '×' + (atMin ? ' (min)' : '');
       zoomIndicator.style.opacity = '1';
       clearTimeout(zoomHideTimer);
       zoomHideTimer = setTimeout(() => zoomIndicator.style.opacity = '0', 1500);
@@ -741,7 +741,7 @@
       if (!zoomCaps || !videoTrack) return;
       currentZoom = Math.min(zoomCaps.max, Math.max(zoomCaps.min, newZoom));
       videoTrack.applyConstraints({ advanced: [{ zoom: currentZoom }] }).catch(() => {});
-      showZoom(currentZoom);
+      showZoom(currentZoom, newZoom < zoomCaps.min);
     }
 
     cameraWrap.addEventListener('touchstart', e => {
