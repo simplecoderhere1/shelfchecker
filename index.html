@@ -1328,6 +1328,43 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       });
     }
 
+    // Sanitize bounding boxes within a shelf: clamp oversized widths and resolve overlaps.
+    // Books must already be sorted left-to-right by X-center.
+    function sanitizeShelfBoxes(shelfBooks) {
+      if (shelfBooks.length < 2) return shelfBooks;
+
+      // Median width — used to cap outliers
+      const widths = shelfBooks.map(b => b.bounding_box[3] - b.bounding_box[1]).sort((a, b) => a - b);
+      const medW = widths[Math.floor(widths.length / 2)];
+      const maxW = medW * 1.8;  // no box wider than 1.8× median
+
+      const fixed = shelfBooks.map(b => {
+        let [ymin, xmin, ymax, xmax] = b.bounding_box;
+        const w = xmax - xmin;
+        if (w > maxW) {
+          // Shrink toward center
+          const cx = (xmin + xmax) / 2;
+          xmin = cx - maxW / 2;
+          xmax = cx + maxW / 2;
+        }
+        return { ...b, bounding_box: [ymin, xmin, ymax, xmax] };
+      });
+
+      // Resolve horizontal overlaps: push adjacent boxes apart so arrows don't stack
+      for (let i = 0; i < fixed.length - 1; i++) {
+        const bbA = fixed[i].bounding_box;
+        const bbB = fixed[i + 1].bounding_box;
+        if (bbA[3] > bbB[1]) {
+          // Overlap detected — split at midpoint
+          const mid = (bbA[3] + bbB[1]) / 2;
+          fixed[i]     = { ...fixed[i],     bounding_box: [bbA[0], bbA[1], bbA[2], mid] };
+          fixed[i + 1] = { ...fixed[i + 1], bounding_box: [bbB[0], mid,    bbB[2], bbB[3]] };
+        }
+      }
+
+      return fixed;
+    }
+
     // Check order for a single shelf of books (already sorted left→right within the shelf).
     function checkOrderOneShelf(books, section) {
       const keys = books.map(b => sortKey(b, section));
@@ -1446,9 +1483,10 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
     function checkOrder(books, section) {
       const { shelves, ungrouped } = groupByShelf(books);
       const checkedShelves = shelves.flatMap((shelf, si) => {
-        const clipped = clipShelfBoxes(shelf);
+        const clipped   = clipShelfBoxes(shelf);
+        const sanitized = sanitizeShelfBoxes(clipped);
         // Tag each book with its shelf index so we can match shelf-mates later
-        return checkOrderOneShelf(clipped, section).map(b => ({ ...b, shelfIndex: si }));
+        return checkOrderOneShelf(sanitized, section).map(b => ({ ...b, shelfIndex: si }));
       });
       // Ungrouped books (no bounding box) — pass through as unverifiable, no shelf info
       const checkedUngrouped = ungrouped.map(b => ({
