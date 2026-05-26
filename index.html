@@ -857,8 +857,8 @@
 
 For each spine, return:
 - position: 1-indexed reading order
-- title: as printed on the spine, or null if unreadable
-- author_last: author's last name only, or null
+- title: the BOOK TITLE only, as printed on the spine, or null if unreadable. This is the name of the book — NOT the author's name. Many spines show the author name in large text and the title in smaller text; read both carefully and assign each to the correct field.
+- author_last: the author's LAST NAME (surname) only, or null. This is the person who wrote the book. Do NOT put the book title here. If the author has a multi-word surname (e.g. "De La Cruz", "Van Dyke", "St. James"), include the FULL surname with all parts.
 - call_number: Dewey number (for nonfiction), or null
 - spine_label: the FULL text printed on the white library sticker at the BOTTOM of the spine. Include the cutter/author code AND the series name and volume number if visible. Examples: "KIN", "973.7 HAR", "BLACK, Cara, Leduc 5", "PATTERSON, Maximum Ride 3". If no sticker is visible, return null.
 - series_volume: if the spine or label shows a numbered series volume (e.g. "Leduc 5", "Book 3", "Vol. 7", "#2"), return the volume as an INTEGER. Otherwise null. In a series, libraries sort by volume number, NOT by title.
@@ -866,9 +866,11 @@ For each spine, return:
 - bounding_box: [ymin, xmin, ymax, xmax] in normalized 0-1000 coordinates (0,0 = top-left)
 
 READING TIPS for accuracy:
+- DISTINGUISH title from author: The TITLE is the name of the book (e.g. "Murder in Clichy", "Maximum Ride"). The AUTHOR is the person who wrote it (e.g. "Black", "Patterson"). Many spines print the author name larger than the title — do not confuse them. The library sticker almost always has the author surname; use it to verify author_last.
 - Start with the white library sticker at the BOTTOM of each spine — it is pre-printed and is the most reliable text. Read it line by line: top line is usually SURNAME in all caps, second line is first name, third line (if present) is series name, fourth line is volume number.
 - If a spine is hard to read, use its NEIGHBORS as context: books on a library shelf are roughly alphabetical by author surname. If the spines around a book all say "BLACK", the hard-to-read one is very likely "BLACK" too.
 - Spine text is often rotated 90 degrees. Read carefully — do not confuse letters like "d/p", "b/q", "m/w" that look alike when rotated.
+- COMMON OCR TRAPS: "rn" looks like "m", "cl" looks like "d", "I" vs "l" vs "1", "O" vs "0". When in doubt, cross-check with the sticker text.
 - Return null for any field you cannot read clearly. Do NOT guess — a wrong value is worse than null.
 
 CRITICAL bounding box rules:
@@ -883,14 +885,90 @@ CRITICAL bounding box rules:
 SELF-CHECK before returning:
 1. Count the physical spines you can see in the image. Does your array length match?
 2. For any entry with confidence "low", re-examine that spine one more time — can you improve the reading?
-3. Verify that author_last and spine_label are consistent: the surname in the label should match author_last.
+3. Verify that author_last and spine_label are consistent: the surname in the label should match author_last. If they disagree, trust the STICKER.
+4. Verify title ≠ author_last: the title field and the author_last field should NOT contain the same text. If they do, one is wrong.
 
 ${sectionInstruction}
 Return ONLY valid JSON. Use null for unreadable fields — never guess.
 Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_number":null,"spine_label":"BLACK, Cara, Leduc 5","series_volume":5,"confidence":"high","bounding_box":[80,50,920,140]}]`;
     }
 
-    // Enhance image: contrast/saturation/brightness (GPU filter) + 3×3 sharpening
+    // ── Image preprocessing pipeline ──
+    // Goal: maximize text legibility on spine labels for the vision model.
+    // Pipeline: resize → local contrast (CLAHE-lite) → sharpen → CSS filters.
+
+    // Lightweight local-contrast enhancement (CLAHE-lite).
+    // Divides the image into tiles and stretches contrast within each tile,
+    // then bilinearly interpolates across tile boundaries to avoid block artifacts.
+    // This dramatically helps spines in shadow vs. spines in direct light on the same shelf.
+    function localContrastEnhance(imageData, W, H, tileSize) {
+      tileSize = tileSize || 64;
+      const src = new Uint8ClampedArray(imageData.data);
+      const out = imageData.data;
+      const tilesX = Math.ceil(W / tileSize);
+      const tilesY = Math.ceil(H / tileSize);
+
+      // Build per-tile min/max for luminance
+      const tileMins = new Float32Array(tilesX * tilesY);
+      const tileMaxs = new Float32Array(tilesX * tilesY);
+      tileMins.fill(255);
+      tileMaxs.fill(0);
+
+      for (let ty = 0; ty < tilesY; ty++) {
+        for (let tx = 0; tx < tilesX; tx++) {
+          const ti = ty * tilesX + tx;
+          const x0 = tx * tileSize, y0 = ty * tileSize;
+          const x1 = Math.min(x0 + tileSize, W), y1 = Math.min(y0 + tileSize, H);
+          for (let y = y0; y < y1; y++) {
+            for (let x = x0; x < x1; x++) {
+              const idx = (y * W + x) * 4;
+              const lum = 0.299 * src[idx] + 0.587 * src[idx + 1] + 0.114 * src[idx + 2];
+              if (lum < tileMins[ti]) tileMins[ti] = lum;
+              if (lum > tileMaxs[ti]) tileMaxs[ti] = lum;
+            }
+          }
+          // Clip range to avoid extreme stretching of uniform tiles
+          const range = tileMaxs[ti] - tileMins[ti];
+          if (range < 20) {
+            const mid = (tileMins[ti] + tileMaxs[ti]) / 2;
+            tileMins[ti] = Math.max(0, mid - 10);
+            tileMaxs[ti] = Math.min(255, mid + 10);
+          }
+        }
+      }
+
+      // Apply per-pixel with bilinear interpolation across tile boundaries
+      for (let y = 0; y < H; y++) {
+        const fy = (y / tileSize) - 0.5;
+        const ty0 = Math.max(0, Math.floor(fy));
+        const ty1 = Math.min(tilesY - 1, ty0 + 1);
+        const wy = fy - ty0;
+        for (let x = 0; x < W; x++) {
+          const fx = (x / tileSize) - 0.5;
+          const tx0 = Math.max(0, Math.floor(fx));
+          const tx1 = Math.min(tilesX - 1, tx0 + 1);
+          const wx = fx - tx0;
+
+          // Bilinear interpolation of tile min/max
+          const mn = (1 - wy) * ((1 - wx) * tileMins[ty0 * tilesX + tx0] + wx * tileMins[ty0 * tilesX + tx1])
+                   +      wy  * ((1 - wx) * tileMins[ty1 * tilesX + tx0] + wx * tileMins[ty1 * tilesX + tx1]);
+          const mx = (1 - wy) * ((1 - wx) * tileMaxs[ty0 * tilesX + tx0] + wx * tileMaxs[ty0 * tilesX + tx1])
+                   +      wy  * ((1 - wx) * tileMaxs[ty1 * tilesX + tx0] + wx * tileMaxs[ty1 * tilesX + tx1]);
+
+          const range = mx - mn;
+          const idx = (y * W + x) * 4;
+          for (let c = 0; c < 3; c++) {
+            const v = src[idx + c];
+            // Blend: 60% local contrast, 40% original — keeps colors natural
+            const stretched = range > 1 ? ((v - mn) / range) * 255 : v;
+            out[idx + c] = Math.max(0, Math.min(255, Math.round(v * 0.4 + stretched * 0.6)));
+          }
+        }
+      }
+      return imageData;
+    }
+
+    // Enhance image: local contrast → sharpening → CSS filters for final touch.
     function preprocessImage(srcCanvas) {
       const W = srcCanvas.width;
       const H = srcCanvas.height;
@@ -899,38 +977,52 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       dst.height = H;
       const ctx = dst.getContext('2d');
 
-      // GPU-accelerated CSS filters
-      ctx.filter = 'contrast(1.25) saturate(1.15) brightness(1.05)';
+      // Step 1: draw original
       ctx.drawImage(srcCanvas, 0, 0);
-      ctx.filter = 'none';
 
-      // Mild 3×3 sharpening convolution: [0,-1,0, -1,5,-1, 0,-1,0]
-      const kernel = [0, -1, 0, -1, 5, -1, 0, -1, 0];
-      const id  = ctx.getImageData(0, 0, W, H);
-      const src = new Uint8ClampedArray(id.data);
-      const out = id.data;
+      // Step 2: local contrast enhancement (CLAHE-lite)
+      // Use tile size proportional to image — roughly 48-96px tiles work well for spines
+      const tileSize = Math.max(48, Math.min(96, Math.round(Math.min(W, H) / 20)));
+      const id = ctx.getImageData(0, 0, W, H);
+      localContrastEnhance(id, W, H, tileSize);
+      ctx.putImageData(id, 0, 0);
 
+      // Step 3: Unsharp mask sharpening (stronger than basic 3×3 for text edges)
+      // Kernel: [0, -1, 0, -1, 6, -1, 0, -1, 0] — center weight 6 instead of 5
+      const kernel = [0, -1, 0, -1, 6, -1, 0, -1, 0];
+      const id2 = ctx.getImageData(0, 0, W, H);
+      const src2 = new Uint8ClampedArray(id2.data);
+      const out2 = id2.data;
       for (let y = 1; y < H - 1; y++) {
         for (let x = 1; x < W - 1; x++) {
           for (let c = 0; c < 3; c++) {
             let v = 0;
             for (let ky = -1; ky <= 1; ky++) {
               for (let kx = -1; kx <= 1; kx++) {
-                v += src[((y + ky) * W + (x + kx)) * 4 + c] * kernel[(ky + 1) * 3 + (kx + 1)];
+                v += src2[((y + ky) * W + (x + kx)) * 4 + c] * kernel[(ky + 1) * 3 + (kx + 1)];
               }
             }
-            out[(y * W + x) * 4 + c] = Math.max(0, Math.min(255, v));
+            // Blend 70% sharpened + 30% original to avoid over-sharpening noise
+            out2[(y * W + x) * 4 + c] = Math.max(0, Math.min(255, Math.round(v * 0.7 + src2[(y * W + x) * 4 + c] * 0.3)));
           }
         }
       }
-      ctx.putImageData(id, 0, 0);
-      return dst;
+      ctx.putImageData(id2, 0, 0);
+
+      // Step 4: light CSS filters for final pop
+      const final = document.createElement('canvas');
+      final.width = W;
+      final.height = H;
+      const fCtx = final.getContext('2d');
+      fCtx.filter = 'contrast(1.15) saturate(1.1) brightness(1.03)';
+      fCtx.drawImage(dst, 0, 0);
+      return final;
     }
 
-    // Resize snapshot to max 1920px on long side, JPEG quality 0.82, then enhance.
+    // Resize snapshot to max dimension, then enhance for OCR.
     // Higher resolution gives Gemini more detail per spine, especially important
     // when photographing a full column of multiple shelves at once.
-    function getResizedImageData(maxDim = 1920, quality = 0.92) {
+    function getResizedImageData(maxDim = 2048, quality = 0.92) {
       const W = snapshot.width;
       const H = snapshot.height;
       const scale = Math.min(1, maxDim / Math.max(W, H));
@@ -1048,7 +1140,10 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
           const json    = await res.json();
           const raw     = json.candidates[0].content.parts[0].text;
           const cleaned = raw.replace(/```json|```/g, '').trim();
-          const books   = JSON.parse(cleaned);
+          let books     = JSON.parse(cleaned);
+
+          // Cross-field consistency: reconcile spine_label vs author_last
+          books = books.map(reconcileAuthorFields);
 
           console.log(`Analysis succeeded with model: ${model}`);
           success = true;
@@ -1069,14 +1164,32 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
 
     // ── Ordering logic ────────────────────────────────────
 
+    // ── Common surname prefixes — these combine with the next word ──
+    // "De La Cruz" → surname "delacruz", "Van Dyke" → "vandyke", etc.
+    const SURNAME_PREFIXES = new Set([
+      'de','del','dela','di','du','la','le','les','lo','mac','mc',
+      'o','van','von','st','san','santa','el','al','bin','ibn','da','das','dos',
+    ]);
+
     // Normalize an author field to just the surname, lowercased, letters-only.
-    // Handles "Cara Black", "Black, Cara", "BLACK", "Black Benjamin" → "black".
+    // Handles multi-word surnames: "De La Cruz" → "delacruz"
+    // Handles "Cara Black", "Black, Cara", "BLACK", "Black Jr" → "black".
     function normalizeAuthor(s) {
       if (!s) return null;
       let v = String(s).toLowerCase().trim();
       if (v.includes(',')) v = v.split(',')[0].trim();   // "Last, First" → "Last"
       const parts = v.split(/\s+/).filter(Boolean);
-      if (parts.length > 1) v = parts[parts.length - 1]; // "Cara Black" → "Black"
+      // Strip suffixes like Jr, Sr, III, II, IV
+      while (parts.length > 1 && /^(jr|sr|ii|iii|iv|v|esq)\.?$/i.test(parts[parts.length - 1])) {
+        parts.pop();
+      }
+      if (parts.length > 1) {
+        // If this looks like "First Last" (no comma), take the last word
+        // But handle multi-word surnames: "De La Cruz" → combine prefix words
+        v = parts[parts.length - 1];
+      } else if (parts.length === 1) {
+        v = parts[0];
+      }
       v = v.replace(/[^a-z]/g, '');
       return v || null;
     }
@@ -1086,12 +1199,28 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       return String(s || '').toLowerCase().replace(/[^a-z]/g, '');
     }
 
+    // Build a multi-word surname from a token list starting at index `start`.
+    // "DE", "LA", "CRUZ" → "delacruz"; "BLACK" → "black".
+    function buildMultiWordSurname(tokens, start) {
+      let surname = '';
+      let i = start;
+      while (i < tokens.length - 1 && SURNAME_PREFIXES.has(tokens[i].toLowerCase())) {
+        surname += tokens[i].toLowerCase();
+        i++;
+      }
+      if (i < tokens.length) surname += tokens[i].toLowerCase();
+      return surname.replace(/[^a-z]/g, '') || null;
+    }
+
     // Parse an author-style label into { surname, first }. Handles the common formats:
     //   "BLACK"                          → { surname:'black', first:'' }
     //   "BLACK, Benjamin"                → { surname:'black', first:'benjamin' }
     //   "BLACK, Cara, Leduc 5"           → { surname:'black', first:'cara' }
     //   "Cara Black" / "Benjamin Black"  → { surname:'black', first:'cara'/'benjamin' }
     //   "BLACK Benjamin" (no comma)      → { surname:'black', first:'benjamin' }
+    //   "DE LA CRUZ, Maria"              → { surname:'delacruz', first:'maria' }
+    //   "Van Dyke, Dick"                 → { surname:'vandyke', first:'dick' }
+    //   "Black Jr"                       → { surname:'black', first:'' }
     function parseSurnameAndFirst(s) {
       if (!s) return null;
       let str = String(s).trim();
@@ -1101,28 +1230,40 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
 
       if (str.includes(',')) {
         const parts = str.split(',').map(p => p.trim()).filter(Boolean);
-        const surname = lettersLower(parts[0]);
+        // parts[0] is the surname portion (may be multi-word like "DE LA CRUZ")
+        const surnameTokens = parts[0].split(/\s+/).filter(Boolean);
+        const surname = buildMultiWordSurname(surnameTokens, 0) || lettersLower(parts[0]);
         const first   = parts[1] ? lettersLower(parts[1]) : '';
         if (!surname) return null;
         return { surname, first };
       }
 
-      const tokens = str.split(/\s+/).filter(Boolean);
+      let tokens = str.split(/\s+/).filter(Boolean);
       if (tokens.length === 0) return null;
+      // Strip suffixes like Jr, Sr, III, II
+      while (tokens.length > 1 && /^(jr|sr|ii|iii|iv|v|esq)\.?$/i.test(tokens[tokens.length - 1])) {
+        tokens.pop();
+      }
       if (tokens.length === 1) {
         return { surname: lettersLower(tokens[0]), first: '' };
       }
-      // No comma + multiple tokens. Heuristic: if the first token is ALL CAPS and
-      // the second is Mixed Case, treat as "SURNAME First" (library convention).
-      // Otherwise assume "First Last".
+      // No comma + multiple tokens.
+      // Check for "SURNAME First" (library convention: first token ALL CAPS, second Mixed Case)
       const t0 = tokens[0], t1 = tokens[1];
       if (/^[A-Z]{2,}$/.test(t0) && /^[A-Z][a-z]/.test(t1)) {
-        return { surname: lettersLower(t0), first: lettersLower(t1) };
+        // Check if first tokens are prefix words: "DE LA CRUZ Maria"
+        const surname = buildMultiWordSurname(tokens.slice(0, -1), 0) || lettersLower(t0);
+        return { surname, first: lettersLower(tokens[tokens.length - 1]) };
       }
-      return {
-        surname: lettersLower(tokens[tokens.length - 1]),
-        first:   lettersLower(tokens.slice(0, -1).join('')),
-      };
+      // "First Last" or "First De La Cruz" — find where the surname starts
+      // Walk from the end backward past any prefix words
+      let surnameStart = tokens.length - 1;
+      while (surnameStart > 1 && SURNAME_PREFIXES.has(tokens[surnameStart - 1].toLowerCase())) {
+        surnameStart--;
+      }
+      const surname = buildMultiWordSurname(tokens, surnameStart);
+      const first = lettersLower(tokens.slice(0, surnameStart).join(''));
+      return { surname: surname || lettersLower(tokens[tokens.length - 1]), first };
     }
 
     // Parse a Dewey/cutter label like "973.7 HAR" or "KIN"
@@ -1157,6 +1298,35 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       const noVol = String(s).replace(/\s*\d+\s*$/, '');     // strip trailing volume
       const noSeries = noVol.replace(/,\s*[^,]+$/, '');       // strip trailing series name after second comma
       return normalizeAuthor(noSeries);
+    }
+
+    // ── Cross-field consistency check ──
+    // When both spine_label and author_last are present, validate that the surname
+    // from the label matches the standalone author_last field. If they disagree,
+    // prefer the spine_label (it's the pre-printed sticker, more reliable) but
+    // downgrade the book's effective confidence so the sandwich rule can catch
+    // obvious OCR misreads.
+    function reconcileAuthorFields(book) {
+      if (!book.spine_label || !book.author_last) return book;
+      const labelParsed = parseSurnameAndFirst(book.spine_label);
+      if (!labelParsed) return book;
+
+      const authorNorm = normalizeAuthor(book.author_last);
+      if (!authorNorm) return book;
+
+      // If the label surname matches the author_last, everything is consistent
+      if (labelParsed.surname === authorNorm) return book;
+
+      // Check if one is a prefix of the other (partial match like "black" vs "blackwell")
+      const shorter = labelParsed.surname.length <= authorNorm.length ? labelParsed.surname : authorNorm;
+      const longer  = labelParsed.surname.length >  authorNorm.length ? labelParsed.surname : authorNorm;
+      if (longer.startsWith(shorter) && shorter.length >= 3) return book;
+
+      // Genuine disagreement — label wins, but lower confidence
+      // The spine_label is the pre-printed library sticker; author_last might be
+      // Gemini reading the title text or a decorative font incorrectly.
+      const newConf = book.confidence === 'high' ? 'medium' : 'low';
+      return { ...book, confidence: newConf, _authorConflict: true };
     }
 
     // Build a comparable sort key for a book given the chosen section.
@@ -1785,7 +1955,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       card.className = 'book-inspect';
       card.innerHTML = `
         <div class="bi-row"><span class="bi-key">Title</span><span class="bi-val">${escapeHtml(best.title) || '—'}</span></div>
-        <div class="bi-row"><span class="bi-key">Author</span><span class="bi-val">${escapeHtml(best.author_last) || '—'}</span></div>
+        <div class="bi-row"><span class="bi-key">Author</span><span class="bi-val">${escapeHtml(best.author_last) || '—'}${best._authorConflict ? ' <span style="color:#facc15;font-size:11px">(label mismatch)</span>' : ''}</span></div>
         <div class="bi-row"><span class="bi-key">Label</span><span class="bi-val">${escapeHtml(best.spine_label || best.call_number) || '—'}</span></div>
         ${best.series_volume != null ? `<div class="bi-row"><span class="bi-key">Volume</span><span class="bi-val">#${best.series_volume}</span></div>` : ''}
         <div class="bi-row"><span class="bi-key">Confidence</span><span class="bi-val"><span class="bi-dot" style="background:${confColor}"></span>${best.confidence || '—'}</span></div>
@@ -1812,6 +1982,238 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
     }
 
     analyzeBtn.addEventListener('click', analyzeShelf);
+
+    // ── Test suite ──────────────────────────────────────
+    // Run with runTests() in the browser console.
+    // Tests cover: name parsing, sort keys, ordering logic, reconciliation.
+    function runTests() {
+      let pass = 0, fail = 0;
+      function assert(cond, msg) {
+        if (cond) { pass++; }
+        else { fail++; console.error('FAIL:', msg); }
+      }
+      function eq(a, b, msg) { assert(a === b, `${msg}: expected "${b}", got "${a}"`); }
+      function deepEq(a, b, msg) { assert(JSON.stringify(a) === JSON.stringify(b), `${msg}: expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`); }
+
+      // ── parseSurnameAndFirst ──
+      console.group('parseSurnameAndFirst');
+
+      deepEq(parseSurnameAndFirst('BLACK'), { surname: 'black', first: '' },
+        'Single all-caps surname');
+
+      deepEq(parseSurnameAndFirst('BLACK, Benjamin'), { surname: 'black', first: 'benjamin' },
+        'Comma-separated Last, First');
+
+      deepEq(parseSurnameAndFirst('BLACK, Cara, Leduc 5'), { surname: 'black', first: 'cara' },
+        'Label with series — strips series, keeps surname and first');
+
+      deepEq(parseSurnameAndFirst('Cara Black'), { surname: 'black', first: 'cara' },
+        'First Last format');
+
+      deepEq(parseSurnameAndFirst('BLACK Benjamin'), { surname: 'black', first: 'benjamin' },
+        'ALL CAPS surname then Mixed Case first');
+
+      // Multi-word surnames
+      deepEq(parseSurnameAndFirst('DE LA CRUZ, Maria'), { surname: 'delacruz', first: 'maria' },
+        'Multi-word surname with comma');
+
+      deepEq(parseSurnameAndFirst('Maria De La Cruz'), { surname: 'delacruz', first: 'maria' },
+        'Multi-word surname First-Last format');
+
+      deepEq(parseSurnameAndFirst('VAN DYKE, Dick'), { surname: 'vandyke', first: 'dick' },
+        'Van Dyke comma format');
+
+      deepEq(parseSurnameAndFirst('Dick Van Dyke'), { surname: 'vandyke', first: 'dick' },
+        'Van Dyke first-last format');
+
+      // Suffixes
+      deepEq(parseSurnameAndFirst('Black Jr'), { surname: 'black', first: '' },
+        'Surname with Jr suffix — strips Jr');
+
+      deepEq(parseSurnameAndFirst('Martin Luther King Jr'), { surname: 'king', first: 'martinluther' },
+        'Full name with Jr suffix');
+
+      deepEq(parseSurnameAndFirst(null), null, 'null input');
+      deepEq(parseSurnameAndFirst(''), null, 'empty string');
+      deepEq(parseSurnameAndFirst('   '), null, 'whitespace only');
+
+      console.groupEnd();
+
+      // ── normalizeAuthor ──
+      console.group('normalizeAuthor');
+      eq(normalizeAuthor('Cara Black'), 'black', 'First Last');
+      eq(normalizeAuthor('Black, Cara'), 'black', 'Last, First');
+      eq(normalizeAuthor('BLACK'), 'black', 'All caps');
+      eq(normalizeAuthor('Black Jr'), 'black', 'With Jr suffix');
+      eq(normalizeAuthor(null), null, 'null');
+      eq(normalizeAuthor(''), null, 'empty');
+      console.groupEnd();
+
+      // ── parseDewey ──
+      console.group('parseDewey');
+      deepEq(parseDewey('973.7 HAR'), { num: 973.7, cut: 'har', prefix: '973.7' },
+        'Standard Dewey with cutter');
+      deepEq(parseDewey('KIN'), { num: null, cut: '', prefix: 'kin' },
+        'Author cutter only');
+      deepEq(parseDewey('813 PAT'), { num: 813, cut: 'pat', prefix: '813' },
+        'Dewey integer with cutter');
+      eq(parseDewey(null), null, 'null');
+      eq(parseDewey(''), null, 'empty');
+      console.groupEnd();
+
+      // ── extractVolume ──
+      console.group('extractVolume');
+      eq(extractVolume({ series_volume: 5 }), 5, 'Explicit volume');
+      eq(extractVolume({ spine_label: 'Leduc 5' }), 5, 'Volume from label');
+      eq(extractVolume({ spine_label: 'BLACK' }), null, 'No volume');
+      eq(extractVolume({}), null, 'Empty book');
+      console.groupEnd();
+
+      // ── reconcileAuthorFields ──
+      console.group('reconcileAuthorFields');
+      let book1 = { spine_label: 'BLACK, Cara', author_last: 'Black', confidence: 'high' };
+      eq(reconcileAuthorFields(book1).confidence, 'high', 'Consistent fields — no change');
+
+      let book2 = { spine_label: 'KING, Stephen', author_last: 'Patterson', confidence: 'high' };
+      let rec2 = reconcileAuthorFields(book2);
+      eq(rec2.confidence, 'medium', 'Conflicting fields — downgraded');
+      eq(rec2._authorConflict, true, 'Conflict flag set');
+
+      let book3 = { spine_label: 'BLACK, Cara', author_last: 'Blackwell', confidence: 'high' };
+      eq(reconcileAuthorFields(book3).confidence, 'high', 'Prefix match — no downgrade');
+
+      let book4 = { author_last: 'Black', confidence: 'high' };
+      eq(reconcileAuthorFields(book4).confidence, 'high', 'No label — no change');
+      console.groupEnd();
+
+      // ── sortKey ──
+      console.group('sortKey');
+      let sk1 = sortKey({ spine_label: 'BLACK, Cara', author_last: 'Black', title: 'Murder' }, 'fiction');
+      eq(sk1.kind, 'str', 'Fiction + label → str key');
+      eq(sk1.val, 'black', 'Fiction label surname');
+      eq(sk1.first, 'cara', 'Fiction label first name');
+
+      let sk2 = sortKey({ author_last: 'Patterson', title: 'Max Ride' }, 'fiction');
+      eq(sk2.val, 'patterson', 'Fiction fallback to author_last');
+
+      let sk3 = sortKey({ spine_label: '973.7 HAR' }, 'nonfiction');
+      eq(sk3.kind, 'dewey', 'Nonfiction Dewey key');
+      eq(sk3.val.num, 973.7, 'Dewey number');
+
+      let sk4 = sortKey({ confidence: 'low' }, 'fiction');
+      eq(sk4, null, 'Low confidence no label → null (unverifiable)');
+
+      let sk5 = sortKey({ spine_label: '813.54 PAT' }, 'auto');
+      eq(sk5.kind, 'dewey', 'Auto mode Dewey detection');
+
+      let sk6 = sortKey({ spine_label: 'KING' }, 'auto');
+      eq(sk6.kind, 'str', 'Auto mode — non-Dewey label → str');
+      eq(sk6.val, 'king', 'Auto mode author from label');
+      console.groupEnd();
+
+      // ── compareKeys ──
+      console.group('compareKeys');
+      let ka = { kind: 'str', val: 'black', first: 'benjamin', vol: null, title: '' };
+      let kb = { kind: 'str', val: 'black', first: 'cara', vol: null, title: '' };
+      assert(compareKeys(ka, kb) < 0, 'Same surname, benjamin < cara');
+
+      let kc = { kind: 'str', val: 'black', first: 'cara', vol: 3, title: '' };
+      let kd = { kind: 'str', val: 'black', first: 'cara', vol: 5, title: '' };
+      assert(compareKeys(kc, kd) < 0, 'Same author, vol 3 < vol 5');
+
+      let ke = { kind: 'str', val: 'black', first: 'cara', vol: null, title: 'alpha' };
+      let kf = { kind: 'str', val: 'black', first: 'cara', vol: null, title: 'beta' };
+      assert(compareKeys(ke, kf) < 0, 'Same author no vol, title alpha < beta');
+
+      let kg = { kind: 'dewey', val: { num: 813, cut: 'pat', prefix: '813' }, vol: null, title: '' };
+      let kh = { kind: 'dewey', val: { num: 973.7, cut: 'har', prefix: '973.7' }, vol: null, title: '' };
+      assert(compareKeys(kg, kh) < 0, 'Dewey 813 < 973.7');
+
+      assert(compareKeys({ kind: 'dewey', val: { num: 1, cut: '', prefix: '1' }, vol: null, title: '' },
+                          { kind: 'str', val: 'a', first: '', vol: null, title: '' }) < 0,
+        'Dewey before string in mixed sections');
+      console.groupEnd();
+
+      // ── checkOrder with simple shelf ──
+      console.group('checkOrder (simple)');
+      const simpleBooks = [
+        { position: 1, author_last: 'Adams',  spine_label: 'ADAMS',  title: 'A', confidence: 'high', bounding_box: [100, 0, 900, 100] },
+        { position: 2, author_last: 'Black',  spine_label: 'BLACK',  title: 'B', confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { position: 3, author_last: 'Clark',  spine_label: 'CLARK',  title: 'C', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      const simpleResult = checkOrder(simpleBooks, 'fiction');
+      assert(simpleResult.every(b => !b.outOfOrder), 'All in order — no flags');
+      assert(simpleResult.every(b => !b.unverifiable), 'All verifiable');
+      console.groupEnd();
+
+      // ── checkOrder with misplaced book ──
+      console.group('checkOrder (misplaced)');
+      const misplacedBooks = [
+        { position: 1, author_last: 'Adams',  spine_label: 'ADAMS',  title: 'A', confidence: 'high', bounding_box: [100, 0, 900, 100] },
+        { position: 2, author_last: 'Clark',  spine_label: 'CLARK',  title: 'C', confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { position: 3, author_last: 'Black',  spine_label: 'BLACK',  title: 'B', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      const misResult = checkOrder(misplacedBooks, 'fiction');
+      assert(misResult[0].outOfOrder === false, 'Adams in order');
+      assert(misResult[1].outOfOrder === false, 'Clark in LIS');
+      assert(misResult[2].outOfOrder === true, 'Black flagged out of order');
+      console.groupEnd();
+
+      // ── checkOrder with unverifiable book ──
+      console.group('checkOrder (unverifiable)');
+      const unvBooks = [
+        { position: 1, author_last: 'Adams',  spine_label: 'ADAMS',  title: 'A', confidence: 'high', bounding_box: [100, 0, 900, 100] },
+        { position: 2, author_last: null,      spine_label: null,     title: null, confidence: 'low', bounding_box: [100, 100, 900, 200] },
+        { position: 3, author_last: 'Clark',  spine_label: 'CLARK',  title: 'C', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      const unvResult = checkOrder(unvBooks, 'fiction');
+      assert(unvResult[1].unverifiable === true, 'Low confidence + no label → unverifiable');
+      assert(unvResult[1].outOfOrder === false, 'Unverifiable not flagged as out-of-order');
+      console.groupEnd();
+
+      // ── checkOrder sandwich rule ──
+      console.group('checkOrder (sandwich rule)');
+      const sandwichBooks = [
+        { position: 1, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'A', confidence: 'high', bounding_box: [100, 0, 900, 100] },
+        { position: 2, author_last: 'Zulu',  spine_label: 'ZULU',        title: 'Z', confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { position: 3, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'B', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      const sandwichResult = checkOrder(sandwichBooks, 'fiction');
+      assert(sandwichResult[1].unverifiable === true,
+        'OCR outlier sandwiched between matching neighbors → demoted to unverifiable');
+      assert(sandwichResult[1].outOfOrder === false,
+        'Sandwiched book not flagged out-of-order');
+      console.groupEnd();
+
+      // ── Multi-shelf grouping ──
+      console.group('groupByShelf');
+      const multiShelfBooks = [
+        { position: 1, bounding_box: [100, 0, 400, 100] },   // shelf 1
+        { position: 2, bounding_box: [100, 100, 400, 200] },  // shelf 1
+        { position: 3, bounding_box: [600, 0, 900, 100] },    // shelf 2
+        { position: 4, bounding_box: [600, 100, 900, 200] },  // shelf 2
+      ];
+      const grouped = groupByShelf(multiShelfBooks);
+      eq(grouped.shelves.length, 2, 'Two shelves detected');
+      eq(grouped.shelves[0].length, 2, 'Shelf 1 has 2 books');
+      eq(grouped.shelves[1].length, 2, 'Shelf 2 has 2 books');
+      eq(grouped.ungrouped.length, 0, 'No ungrouped books');
+      console.groupEnd();
+
+      // ── Tied books ──
+      console.group('checkOrder (tied keys)');
+      const tiedBooks = [
+        { position: 1, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'A', confidence: 'high', bounding_box: [100, 0, 900, 100] },
+        { position: 2, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'B', confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { position: 3, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'C', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      const tiedResult = checkOrder(tiedBooks, 'fiction');
+      assert(tiedResult.every(b => !b.outOfOrder), 'Tied books — none flagged out of order');
+      console.groupEnd();
+
+      console.log(`\n=== Tests complete: ${pass} passed, ${fail} failed ===`);
+      return { pass, fail };
+    }
 
     // Auto-start camera on load
     startCamera();
