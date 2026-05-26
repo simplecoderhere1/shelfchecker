@@ -195,6 +195,37 @@
     .cam-error.show { display: flex; }
     .cam-error p { font-size: 14px; line-height: 1.65; max-width: 260px; }
 
+    /* Zoom buttons */
+    .zoom-btns {
+      position: absolute;
+      right: 14px;
+      bottom: 20px;
+      z-index: 15;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .zoom-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      font-size: 22px;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      backdrop-filter: blur(4px);
+      transition: background 0.15s, opacity 0.15s;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .zoom-btn:active { background: rgba(255,255,255,0.25); }
+    .zoom-btn:disabled { opacity: 0.3; pointer-events: none; }
+
     /* Zoom indicator */
     .zoom-indicator {
       position: absolute;
@@ -639,6 +670,10 @@
       <video id="video" autoplay playsinline muted></video>
       <canvas id="snapshot"></canvas>
       <div class="zoom-indicator" id="zoomIndicator"></div>
+      <div class="zoom-btns" id="zoomBtns" style="display:none">
+        <button class="zoom-btn" id="zoomInBtn"  aria-label="Zoom in">+</button>
+        <button class="zoom-btn" id="zoomOutBtn" aria-label="Zoom out">−</button>
+      </div>
 
       <div class="guide" id="guide">
         <div class="guide-box">
@@ -682,6 +717,9 @@
     const cameraWrap    = document.getElementById('cameraWrap');
     const photoArea     = document.getElementById('photoArea');
     const zoomIndicator = document.getElementById('zoomIndicator');
+    const zoomBtns      = document.getElementById('zoomBtns');
+    const zoomInBtn     = document.getElementById('zoomInBtn');
+    const zoomOutBtn    = document.getElementById('zoomOutBtn');
 
     // Section toggle
     document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -712,6 +750,8 @@
         if (caps.zoom) {
           zoomCaps    = caps.zoom;
           currentZoom = caps.zoom.min || 1;
+          zoomBtns.style.display = '';
+          updateZoomBtnState();
         }
       } catch {
         video.style.display = 'none';
@@ -739,6 +779,24 @@
       zoomHideTimer = setTimeout(() => zoomIndicator.style.opacity = '0', 1500);
     }
 
+    function updateZoomBtnState() {
+      if (!zoomCaps) return;
+      zoomOutBtn.disabled = currentZoom <= zoomCaps.min;
+      zoomInBtn.disabled  = currentZoom >= zoomCaps.max;
+    }
+
+    function applyZoom(newZoom) {
+      if (!zoomCaps || !videoTrack) return;
+      currentZoom = Math.min(zoomCaps.max, Math.max(zoomCaps.min, newZoom));
+      videoTrack.applyConstraints({ advanced: [{ zoom: currentZoom }] }).catch(() => {});
+      showZoom(currentZoom);
+      updateZoomBtnState();
+    }
+
+    const ZOOM_STEP = 0.5;
+    zoomInBtn.addEventListener('click',  () => applyZoom(currentZoom + ZOOM_STEP));
+    zoomOutBtn.addEventListener('click', () => applyZoom(currentZoom - ZOOM_STEP));
+
     cameraWrap.addEventListener('touchstart', e => {
       if (e.touches.length === 2) lastPinchDist = getPinchDist(e.touches);
     }, { passive: true });
@@ -750,9 +808,7 @@
       lastPinchDist = dist;
 
       if (zoomCaps && videoTrack) {
-        currentZoom = Math.min(zoomCaps.max, Math.max(zoomCaps.min, currentZoom * delta));
-        videoTrack.applyConstraints({ advanced: [{ zoom: currentZoom }] }).catch(() => {});
-        showZoom(currentZoom);
+        applyZoom(currentZoom * delta);
       }
     }, { passive: true });
 
@@ -802,6 +858,7 @@
       snapshot.style.display   = 'block';
       guide.style.display      = 'none';
       captureBtn.style.display = 'none';
+      zoomBtns.style.display   = 'none';
       actionBtns.classList.add('show');
       analyzeBtn.disabled = false;
     }
@@ -813,6 +870,7 @@
       guide.style.display      = '';
       captureBtn.style.display = '';
       captureBtn.disabled      = false;
+      if (zoomCaps) zoomBtns.style.display = '';
       actionBtns.classList.remove('show');
       analyzeBtn.disabled      = true;
       analyzeBtn.textContent   = 'Analyze';
