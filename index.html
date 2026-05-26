@@ -888,6 +888,8 @@ SELF-CHECK before returning:
 3. Verify that author_last and spine_label are consistent: the surname in the label should match author_last. If they disagree, trust the STICKER.
 4. Verify title ≠ author_last: the title field and the author_last field should NOT contain the same text. If they do, one is wrong.
 
+Two images of the same shelf are provided. Image 1 has been contrast-enhanced and sharpened for maximum text readability. Image 2 is the unprocessed original. If any text in Image 1 looks distorted, blown out, or unclear, cross-reference with Image 2 for the true reading.
+
 ${sectionInstruction}
 Return ONLY valid JSON. Use null for unreadable fields — never guess.
 Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_number":null,"spine_label":"BLACK, Cara, Leduc 5","series_volume":5,"confidence":"high","bounding_box":[80,50,920,140]}]`;
@@ -895,80 +897,274 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
 
     // ── Image preprocessing pipeline ──
     // Goal: maximize text legibility on spine labels for the vision model.
-    // Pipeline: resize → local contrast (CLAHE-lite) → sharpen → CSS filters.
+    // Pipeline: stepDownscale → whiteBalance → adaptiveGamma → CLAHE → multiScaleUnsharpMask → CSS filters.
+    // Both the enhanced AND original images are sent to Gemini for cross-referencing.
 
-    // Lightweight local-contrast enhancement (CLAHE-lite).
-    // Divides the image into tiles and stretches contrast within each tile,
-    // then bilinearly interpolates across tile boundaries to avoid block artifacts.
-    // This dramatically helps spines in shadow vs. spines in direct light on the same shelf.
-    function localContrastEnhance(imageData, W, H, tileSize) {
-      tileSize = tileSize || 64;
+    // Lanczos-quality downscaling via step-halving.
+    // Repeatedly halves image until within 2× of target, then one final drawImage.
+    // This avoids the text-smearing that browser bilinear causes on large reductions.
+    function stepDownscale(srcCanvas, targetW, targetH) {
+      let cur = srcCanvas;
+      let cw = cur.width, ch = cur.height;
+      while (cw / targetW > 2 || ch / targetH > 2) {
+        const nw = Math.max(targetW, Math.ceil(cw / 2));
+        const nh = Math.max(targetH, Math.ceil(ch / 2));
+        const step = document.createElement('canvas');
+        step.width = nw; step.height = nh;
+        step.getContext('2d').drawImage(cur, 0, 0, nw, nh);
+        cur = step; cw = nw; ch = nh;
+      }
+      if (cw !== targetW || ch !== targetH) {
+        const fin = document.createElement('canvas');
+        fin.width = targetW; fin.height = targetH;
+        fin.getContext('2d').drawImage(cur, 0, 0, targetW, targetH);
+        return fin;
+      }
+      return cur;
+    }
+
+    // Auto white-balance via gray-world assumption.
+    // Neutralizes fluorescent green/yellow color casts common in library lighting.
+    function autoWhiteBalance(imageData, W, H) {
+      const d = imageData.data;
+      let rSum = 0, gSum = 0, bSum = 0;
+      const n = W * H;
+      for (let i = 0; i < n; i++) {
+        rSum += d[i * 4]; gSum += d[i * 4 + 1]; bSum += d[i * 4 + 2];
+      }
+      const rMean = rSum / n, gMean = gSum / n, bMean = bSum / n;
+      const gray = (rMean + gMean + bMean) / 3;
+      const rScale = gray / (rMean || 1);
+      const gScale = gray / (gMean || 1);
+      const bScale = gray / (bMean || 1);
+      for (let i = 0; i < n; i++) {
+        const idx = i * 4;
+        d[idx]     = Math.min(255, Math.round(d[idx]     * rScale));
+        d[idx + 1] = Math.min(255, Math.round(d[idx + 1] * gScale));
+        d[idx + 2] = Math.min(255, Math.round(d[idx + 2] * bScale));
+      }
+      return imageData;
+    }
+
+    // Adaptive gamma: lifts shadows (gamma ~0.7) and compresses highlights (gamma ~1.2).
+    // Uses a 256-entry LUT for speed. Targets the "dark bottom shelf / bright top shelf" problem.
+    function adaptiveGamma(imageData, W, H) {
+      const d = imageData.data;
+      const lut = new Uint8Array(256);
+      for (let i = 0; i < 256; i++) {
+        const norm = i / 255;
+        // Gamma varies smoothly: 0.7 at black → 1.2 at white
+        const gamma = 0.7 + 0.5 * norm;
+        lut[i] = Math.round(Math.pow(norm, gamma) * 255);
+      }
+      const n = W * H;
+      for (let i = 0; i < n; i++) {
+        const idx = i * 4;
+        d[idx]     = lut[d[idx]];
+        d[idx + 1] = lut[d[idx + 1]];
+        d[idx + 2] = lut[d[idx + 2]];
+      }
+      return imageData;
+    }
+
+    // True CLAHE (Contrast-Limited Adaptive Histogram Equalization).
+    // Per-tile histogram equalization with clip limiting and bilinear interpolation.
+    // Dramatically better than min/max stretching for revealing midtone text detail.
+    function claheEnhance(imageData, W, H, tileSize, clipLimit) {
+      tileSize = tileSize || 48;
+      clipLimit = clipLimit || 3.0;
+      const nBins = 256;
       const src = new Uint8ClampedArray(imageData.data);
       const out = imageData.data;
       const tilesX = Math.ceil(W / tileSize);
       const tilesY = Math.ceil(H / tileSize);
 
-      // Build per-tile min/max for luminance
-      const tileMins = new Float32Array(tilesX * tilesY);
-      const tileMaxs = new Float32Array(tilesX * tilesY);
-      tileMins.fill(255);
-      tileMaxs.fill(0);
-
+      // Per-tile: build histogram, clip, compute CDF lookup table
+      const tileLUTs = new Array(tilesX * tilesY);
       for (let ty = 0; ty < tilesY; ty++) {
         for (let tx = 0; tx < tilesX; tx++) {
           const ti = ty * tilesX + tx;
           const x0 = tx * tileSize, y0 = ty * tileSize;
-          const x1 = Math.min(x0 + tileSize, W), y1 = Math.min(y0 + tileSize, H);
+          const x1 = Math.min(x0 + tileSize, W);
+          const y1 = Math.min(y0 + tileSize, H);
+          const nPixels = (x1 - x0) * (y1 - y0);
+
+          // Build luminance histogram (integer-weighted for speed)
+          const hist = new Uint32Array(nBins);
           for (let y = y0; y < y1; y++) {
             for (let x = x0; x < x1; x++) {
               const idx = (y * W + x) * 4;
-              const lum = 0.299 * src[idx] + 0.587 * src[idx + 1] + 0.114 * src[idx + 2];
-              if (lum < tileMins[ti]) tileMins[ti] = lum;
-              if (lum > tileMaxs[ti]) tileMaxs[ti] = lum;
+              const lum = (src[idx] * 77 + src[idx + 1] * 150 + src[idx + 2] * 29) >> 8;
+              hist[lum]++;
             }
           }
-          // Clip range to avoid extreme stretching of uniform tiles
-          const range = tileMaxs[ti] - tileMins[ti];
-          if (range < 20) {
-            const mid = (tileMins[ti] + tileMaxs[ti]) / 2;
-            tileMins[ti] = Math.max(0, mid - 10);
-            tileMaxs[ti] = Math.min(255, mid + 10);
+
+          // Clip histogram (redistribute excess evenly)
+          const clipCount = Math.max(1, Math.round((clipLimit * nPixels) / nBins));
+          let excess = 0;
+          for (let i = 0; i < nBins; i++) {
+            if (hist[i] > clipCount) {
+              excess += hist[i] - clipCount;
+              hist[i] = clipCount;
+            }
           }
+          const perBin = Math.floor(excess / nBins);
+          const residual = excess - perBin * nBins;
+          for (let i = 0; i < nBins; i++) hist[i] += perBin;
+          for (let i = 0; i < residual; i++) hist[i]++;
+
+          // Build CDF lookup table
+          const lut = new Uint8Array(nBins);
+          let cumSum = 0;
+          for (let i = 0; i < nBins; i++) {
+            cumSum += hist[i];
+            lut[i] = Math.round((cumSum / nPixels) * 255);
+          }
+          tileLUTs[ti] = lut;
         }
       }
 
-      // Apply per-pixel with bilinear interpolation across tile boundaries
+      // Apply per-pixel with bilinear interpolation between tile LUTs
       for (let y = 0; y < H; y++) {
         const fy = (y / tileSize) - 0.5;
         const ty0 = Math.max(0, Math.floor(fy));
         const ty1 = Math.min(tilesY - 1, ty0 + 1);
-        const wy = fy - ty0;
+        const wy = Math.max(0, fy - ty0);
         for (let x = 0; x < W; x++) {
           const fx = (x / tileSize) - 0.5;
           const tx0 = Math.max(0, Math.floor(fx));
           const tx1 = Math.min(tilesX - 1, tx0 + 1);
-          const wx = fx - tx0;
+          const wx = Math.max(0, fx - tx0);
 
-          // Bilinear interpolation of tile min/max
-          const mn = (1 - wy) * ((1 - wx) * tileMins[ty0 * tilesX + tx0] + wx * tileMins[ty0 * tilesX + tx1])
-                   +      wy  * ((1 - wx) * tileMins[ty1 * tilesX + tx0] + wx * tileMins[ty1 * tilesX + tx1]);
-          const mx = (1 - wy) * ((1 - wx) * tileMaxs[ty0 * tilesX + tx0] + wx * tileMaxs[ty0 * tilesX + tx1])
-                   +      wy  * ((1 - wx) * tileMaxs[ty1 * tilesX + tx0] + wx * tileMaxs[ty1 * tilesX + tx1]);
-
-          const range = mx - mn;
           const idx = (y * W + x) * 4;
+          const lum = (src[idx] * 77 + src[idx + 1] * 150 + src[idx + 2] * 29) >> 8;
+
+          // Bilinear interpolation of four surrounding tile LUTs
+          const v00 = tileLUTs[ty0 * tilesX + tx0][lum];
+          const v01 = tileLUTs[ty0 * tilesX + tx1][lum];
+          const v10 = tileLUTs[ty1 * tilesX + tx0][lum];
+          const v11 = tileLUTs[ty1 * tilesX + tx1][lum];
+          const equalized = (1 - wy) * ((1 - wx) * v00 + wx * v01)
+                          +      wy  * ((1 - wx) * v10 + wx * v11);
+
+          // Map each channel proportionally (preserves color)
+          const scale = lum > 0 ? equalized / lum : 1;
           for (let c = 0; c < 3; c++) {
-            const v = src[idx + c];
-            // Blend: 60% local contrast, 40% original — keeps colors natural
-            const stretched = range > 1 ? ((v - mn) / range) * 255 : v;
-            out[idx + c] = Math.max(0, Math.min(255, Math.round(v * 0.4 + stretched * 0.6)));
+            const enhanced = Math.min(255, src[idx + c] * scale);
+            // Blend 65% CLAHE + 35% original
+            out[idx + c] = Math.round(src[idx + c] * 0.35 + enhanced * 0.65);
           }
         }
       }
       return imageData;
     }
 
-    // Enhance image: local contrast → sharpening → CSS filters for final touch.
+    // Separable box blur (horizontal then vertical). Used by multi-scale sharpening.
+    function boxBlur(src, W, H, radius) {
+      const tmp = new Uint8ClampedArray(src.length);
+      const out = new Uint8ClampedArray(src.length);
+      const d = 2 * radius + 1;
+      // Horizontal pass
+      for (let y = 0; y < H; y++) {
+        for (let c = 0; c < 3; c++) {
+          let sum = 0;
+          for (let kx = -radius; kx <= radius; kx++) {
+            sum += src[(y * W + Math.max(0, Math.min(W - 1, kx))) * 4 + c];
+          }
+          tmp[(y * W) * 4 + c] = Math.round(sum / d);
+          for (let x = 1; x < W; x++) {
+            sum += src[(y * W + Math.min(W - 1, x + radius)) * 4 + c]
+                 - src[(y * W + Math.max(0, x - radius - 1)) * 4 + c];
+            tmp[(y * W + x) * 4 + c] = Math.round(sum / d);
+          }
+        }
+      }
+      // Vertical pass
+      for (let x = 0; x < W; x++) {
+        for (let c = 0; c < 3; c++) {
+          let sum = 0;
+          for (let ky = -radius; ky <= radius; ky++) {
+            sum += tmp[(Math.max(0, Math.min(H - 1, ky)) * W + x) * 4 + c];
+          }
+          out[x * 4 + c] = Math.round(sum / d);
+          for (let y = 1; y < H; y++) {
+            sum += tmp[(Math.min(H - 1, y + radius) * W + x) * 4 + c]
+                 - tmp[(Math.max(0, y - radius - 1) * W + x) * 4 + c];
+            out[(y * W + x) * 4 + c] = Math.round(sum / d);
+          }
+        }
+      }
+      return out;
+    }
+
+    // Multi-scale edge-aware unsharp mask.
+    // Fine pass (3×3) for crisp text strokes + coarse pass (box blur r=3) for letterform detail.
+    // Edge mask prevents noise amplification in smooth/dark areas.
+    function multiScaleUnsharpMask(imageData, W, H) {
+      const src = new Uint8ClampedArray(imageData.data);
+      const out = imageData.data;
+
+      // Fine sharpened image via 3×3 kernel (center weight 6)
+      const fineKernel = [0, -1, 0, -1, 6, -1, 0, -1, 0];
+      const fine = new Uint8ClampedArray(src.length);
+      fine.set(src); // copy border pixels
+      for (let y = 1; y < H - 1; y++) {
+        for (let x = 1; x < W - 1; x++) {
+          for (let c = 0; c < 3; c++) {
+            let v = 0;
+            for (let ky = -1; ky <= 1; ky++)
+              for (let kx = -1; kx <= 1; kx++)
+                v += src[((y + ky) * W + (x + kx)) * 4 + c] * fineKernel[(ky + 1) * 3 + (kx + 1)];
+            fine[(y * W + x) * 4 + c] = Math.max(0, Math.min(255, v));
+          }
+        }
+      }
+
+      // Coarse blur via separable box blur (radius 3)
+      const blurred = boxBlur(src, W, H, 3);
+
+      // Edge mask: gradient magnitude per pixel (Sobel-like luminance gradient).
+      // Only sharpen where edges exist — prevents noise amplification.
+      const edgeMask = new Float32Array(W * H);
+      for (let y = 1; y < H - 1; y++) {
+        for (let x = 1; x < W - 1; x++) {
+          const idx = (y * W + x) * 4;
+          const lumC = src[idx] * 77 + src[idx + 1] * 150 + src[idx + 2] * 29;
+          const idxL = idx - 4, idxR = idx + 4;
+          const idxU = ((y - 1) * W + x) * 4, idxD = ((y + 1) * W + x) * 4;
+          const gx = ((src[idxR] * 77 + src[idxR + 1] * 150 + src[idxR + 2] * 29)
+                    - (src[idxL] * 77 + src[idxL + 1] * 150 + src[idxL + 2] * 29)) >> 8;
+          const gy = ((src[idxD] * 77 + src[idxD + 1] * 150 + src[idxD + 2] * 29)
+                    - (src[idxU] * 77 + src[idxU + 1] * 150 + src[idxU + 2] * 29)) >> 8;
+          const mag = Math.sqrt(gx * gx + gy * gy);
+          // Threshold at 15, saturate at 60 → mask is 0 in flat areas, 1 at strong edges
+          edgeMask[y * W + x] = Math.min(1, Math.max(0, (mag - 15) / 45));
+        }
+      }
+
+      // Combine: fine sharpening + coarse detail recovery, masked by edges
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = y * W + x;
+          const idx = i * 4;
+          const mask = edgeMask[i] || 0;
+          for (let c = 0; c < 3; c++) {
+            const orig = src[idx + c];
+            const fineVal = fine[idx + c];
+            const coarseDetail = orig - blurred[idx + c];
+            // At edges (mask=1): 55% fine-sharpened + 20% original + 25% coarse-enhanced
+            // At flat (mask=0): 100% original
+            const sharpened = fineVal * 0.55 + orig * 0.20 + (orig + coarseDetail * 0.5) * 0.25;
+            out[idx + c] = Math.max(0, Math.min(255, Math.round(
+              orig * (1 - mask) + sharpened * mask
+            )));
+          }
+        }
+      }
+      return imageData;
+    }
+
+    // Full preprocessing pipeline: white balance → gamma → CLAHE → multi-scale sharpen → CSS filters.
     function preprocessImage(srcCanvas) {
       const W = srcCanvas.width;
       const H = srcCanvas.height;
@@ -976,64 +1172,53 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       dst.width  = W;
       dst.height = H;
       const ctx = dst.getContext('2d');
-
-      // Step 1: draw original
       ctx.drawImage(srcCanvas, 0, 0);
 
-      // Step 2: local contrast enhancement (CLAHE-lite)
-      // Use tile size proportional to image — roughly 48-96px tiles work well for spines
-      const tileSize = Math.max(48, Math.min(96, Math.round(Math.min(W, H) / 20)));
-      const id = ctx.getImageData(0, 0, W, H);
-      localContrastEnhance(id, W, H, tileSize);
+      let id = ctx.getImageData(0, 0, W, H);
+
+      // Step 1: Auto white balance (neutralize fluorescent color cast)
+      autoWhiteBalance(id, W, H);
+
+      // Step 2: Adaptive gamma (lift shadows, compress highlights)
+      adaptiveGamma(id, W, H);
+
+      // Step 3: True CLAHE (48px tiles, clip limit 3.0, 65/35 blend)
+      claheEnhance(id, W, H, 48, 3.0);
+
       ctx.putImageData(id, 0, 0);
 
-      // Step 3: Unsharp mask sharpening (stronger than basic 3×3 for text edges)
-      // Kernel: [0, -1, 0, -1, 6, -1, 0, -1, 0] — center weight 6 instead of 5
-      const kernel = [0, -1, 0, -1, 6, -1, 0, -1, 0];
-      const id2 = ctx.getImageData(0, 0, W, H);
-      const src2 = new Uint8ClampedArray(id2.data);
-      const out2 = id2.data;
-      for (let y = 1; y < H - 1; y++) {
-        for (let x = 1; x < W - 1; x++) {
-          for (let c = 0; c < 3; c++) {
-            let v = 0;
-            for (let ky = -1; ky <= 1; ky++) {
-              for (let kx = -1; kx <= 1; kx++) {
-                v += src2[((y + ky) * W + (x + kx)) * 4 + c] * kernel[(ky + 1) * 3 + (kx + 1)];
-              }
-            }
-            // Blend 70% sharpened + 30% original to avoid over-sharpening noise
-            out2[(y * W + x) * 4 + c] = Math.max(0, Math.min(255, Math.round(v * 0.7 + src2[(y * W + x) * 4 + c] * 0.3)));
-          }
-        }
-      }
-      ctx.putImageData(id2, 0, 0);
+      // Step 4: Multi-scale edge-aware unsharp mask
+      id = ctx.getImageData(0, 0, W, H);
+      multiScaleUnsharpMask(id, W, H);
+      ctx.putImageData(id, 0, 0);
 
-      // Step 4: light CSS filters for final pop
+      // Step 5: light CSS filters — reduced since CLAHE does the heavy work now
       const final = document.createElement('canvas');
       final.width = W;
       final.height = H;
       const fCtx = final.getContext('2d');
-      fCtx.filter = 'contrast(1.15) saturate(1.1) brightness(1.03)';
+      fCtx.filter = 'contrast(1.10) saturate(1.05)';
       fCtx.drawImage(dst, 0, 0);
       return final;
     }
 
-    // Resize snapshot to max dimension, then enhance for OCR.
-    // Higher resolution gives Gemini more detail per spine, especially important
-    // when photographing a full column of multiple shelves at once.
-    function getResizedImageData(maxDim = 2048, quality = 0.92) {
+    // Resize snapshot, enhance, and return BOTH enhanced + original for dual-image API request.
+    // Gemini 2.5 Pro supports up to 3072×3072 at full detail.
+    function getResizedImageData(maxDim = 3072, quality = 0.96) {
       const W = snapshot.width;
       const H = snapshot.height;
       const scale = Math.min(1, maxDim / Math.max(W, H));
+      const tW = Math.round(W * scale);
+      const tH = Math.round(H * scale);
 
-      const tmp  = document.createElement('canvas');
-      tmp.width  = Math.round(W * scale);
-      tmp.height = Math.round(H * scale);
-      tmp.getContext('2d').drawImage(snapshot, 0, 0, tmp.width, tmp.height);
+      // Lanczos-quality downscale via step-halving
+      const resized  = stepDownscale(snapshot, tW, tH);
+      const enhanced = preprocessImage(resized);
 
-      const enhanced = preprocessImage(tmp);
-      return enhanced.toDataURL('image/jpeg', quality).split(',')[1];
+      return {
+        enhanced: enhanced.toDataURL('image/jpeg', quality).split(',')[1],
+        original: resized.toDataURL('image/jpeg', 0.92).split(',')[1],
+      };
     }
 
     let loadingTimer = null;
@@ -1084,7 +1269,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       analyzeBtn.textContent = 'Analyzing…';
       showLoading();
 
-      const imageData = getResizedImageData();
+      const images    = getResizedImageData();
       const section   = getSection();
       const prompt    = buildPrompt(section);
       let success = false;
@@ -1112,7 +1297,8 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
                 contents: [{
                   parts: [
                     { text: prompt },
-                    { inline_data: { mime_type: 'image/jpeg', data: imageData } }
+                    { inline_data: { mime_type: 'image/jpeg', data: images.enhanced } },
+                    { inline_data: { mime_type: 'image/jpeg', data: images.original } }
                   ]
                 }]
               })
