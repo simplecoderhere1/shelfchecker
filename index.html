@@ -1133,6 +1133,17 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       return imageData;
     }
 
+    // Per-pixel luminance map (BT.601, integer-weighted). One value per pixel, range 0-255.
+    // Computed once and reused across passes that would otherwise recompute it per pixel.
+    function computeLuminanceMap(src, W, H) {
+      const lum = new Uint8Array(W * H);
+      for (let p = 0; p < lum.length; p++) {
+        const idx = p * 4;
+        lum[p] = (src[idx] * 77 + src[idx + 1] * 150 + src[idx + 2] * 29) >> 8;
+      }
+      return lum;
+    }
+
     // True CLAHE (Contrast-Limited Adaptive Histogram Equalization).
     // Per-tile histogram equalization with clip limiting and bilinear interpolation.
     // Dramatically better than min/max stretching for revealing midtone text detail.
@@ -1144,6 +1155,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       const out = imageData.data;
       const tilesX = Math.ceil(W / tileSize);
       const tilesY = Math.ceil(H / tileSize);
+      const lumMap = computeLuminanceMap(src, W, H);
 
       // Per-tile: build histogram, clip, compute CDF lookup table
       const tileLUTs = new Array(tilesX * tilesY);
@@ -1159,9 +1171,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
           const hist = new Uint32Array(nBins);
           for (let y = y0; y < y1; y++) {
             for (let x = x0; x < x1; x++) {
-              const idx = (y * W + x) * 4;
-              const lum = (src[idx] * 77 + src[idx + 1] * 150 + src[idx + 2] * 29) >> 8;
-              hist[lum]++;
+              hist[lumMap[y * W + x]]++;
             }
           }
 
@@ -1196,25 +1206,27 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
         const ty0 = Math.max(0, Math.floor(fy));
         const ty1 = Math.min(tilesY - 1, ty0 + 1);
         const wy = Math.max(0, fy - ty0);
+        const rowTop = ty0 * tilesX, rowBot = ty1 * tilesX;
         for (let x = 0; x < W; x++) {
           const fx = (x / tileSize) - 0.5;
           const tx0 = Math.max(0, Math.floor(fx));
           const tx1 = Math.min(tilesX - 1, tx0 + 1);
           const wx = Math.max(0, fx - tx0);
 
-          const idx = (y * W + x) * 4;
-          const lum = (src[idx] * 77 + src[idx + 1] * 150 + src[idx + 2] * 29) >> 8;
+          const p = y * W + x;
+          const lum = lumMap[p];
 
           // Bilinear interpolation of four surrounding tile LUTs
-          const v00 = tileLUTs[ty0 * tilesX + tx0][lum];
-          const v01 = tileLUTs[ty0 * tilesX + tx1][lum];
-          const v10 = tileLUTs[ty1 * tilesX + tx0][lum];
-          const v11 = tileLUTs[ty1 * tilesX + tx1][lum];
+          const v00 = tileLUTs[rowTop + tx0][lum];
+          const v01 = tileLUTs[rowTop + tx1][lum];
+          const v10 = tileLUTs[rowBot + tx0][lum];
+          const v11 = tileLUTs[rowBot + tx1][lum];
           const equalized = (1 - wy) * ((1 - wx) * v00 + wx * v01)
                           +      wy  * ((1 - wx) * v10 + wx * v11);
 
           // Map each channel proportionally (preserves color)
           const scale = lum > 0 ? equalized / lum : 1;
+          const idx = p * 4;
           for (let c = 0; c < 3; c++) {
             const enhanced = Math.min(255, src[idx + c] * scale);
             // Blend 65% CLAHE + 35% original
@@ -1289,22 +1301,20 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       // Coarse blur via separable box blur (radius 3)
       const blurred = boxBlur(src, W, H, 3);
 
+      // Precompute per-pixel luminance once so the Sobel pass is a simple neighbor lookup.
+      const lumMap = computeLuminanceMap(src, W, H);
+
       // Edge mask: gradient magnitude per pixel (Sobel-like luminance gradient).
       // Only sharpen where edges exist — prevents noise amplification.
       const edgeMask = new Float32Array(W * H);
       for (let y = 1; y < H - 1; y++) {
         for (let x = 1; x < W - 1; x++) {
-          const idx = (y * W + x) * 4;
-          const lumC = src[idx] * 77 + src[idx + 1] * 150 + src[idx + 2] * 29;
-          const idxL = idx - 4, idxR = idx + 4;
-          const idxU = ((y - 1) * W + x) * 4, idxD = ((y + 1) * W + x) * 4;
-          const gx = ((src[idxR] * 77 + src[idxR + 1] * 150 + src[idxR + 2] * 29)
-                    - (src[idxL] * 77 + src[idxL + 1] * 150 + src[idxL + 2] * 29)) >> 8;
-          const gy = ((src[idxD] * 77 + src[idxD + 1] * 150 + src[idxD + 2] * 29)
-                    - (src[idxU] * 77 + src[idxU + 1] * 150 + src[idxU + 2] * 29)) >> 8;
+          const p = y * W + x;
+          const gx = lumMap[p + 1] - lumMap[p - 1];
+          const gy = lumMap[p + W] - lumMap[p - W];
           const mag = Math.sqrt(gx * gx + gy * gy);
           // Threshold at 15, saturate at 60 → mask is 0 in flat areas, 1 at strong edges
-          edgeMask[y * W + x] = Math.min(1, Math.max(0, (mag - 15) / 45));
+          edgeMask[p] = Math.min(1, Math.max(0, (mag - 15) / 45));
         }
       }
 
@@ -1340,22 +1350,12 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       const ctx = dst.getContext('2d');
       ctx.drawImage(srcCanvas, 0, 0);
 
-      let id = ctx.getImageData(0, 0, W, H);
-
-      // Step 1: Auto white balance (neutralize fluorescent color cast)
-      autoWhiteBalance(id, W, H);
-
-      // Step 2: Adaptive gamma (lift shadows, compress highlights)
-      adaptiveGamma(id, W, H);
-
-      // Step 3: True CLAHE (48px tiles, clip limit 3.0, 65/35 blend)
-      claheEnhance(id, W, H, 48, 3.0);
-
-      ctx.putImageData(id, 0, 0);
-
-      // Step 4: Multi-scale edge-aware unsharp mask
-      id = ctx.getImageData(0, 0, W, H);
-      multiScaleUnsharpMask(id, W, H);
+      // Steps 1-4 each mutate the same ImageData in place, so one read + one write bracket them.
+      const id = ctx.getImageData(0, 0, W, H);
+      autoWhiteBalance(id, W, H);                 // neutralize fluorescent color cast
+      adaptiveGamma(id, W, H);                    // lift shadows, compress highlights
+      claheEnhance(id, W, H, 48, 3.0);            // local contrast (48px tiles, clip 3.0, 65/35 blend)
+      multiScaleUnsharpMask(id, W, H);            // edge-aware sharpening
       ctx.putImageData(id, 0, 0);
 
       // Step 5: light CSS filters — reduced since CLAHE does the heavy work now
@@ -1430,81 +1430,78 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       }
     }
 
+    // Call Gemini with automatic model fallback. Sends the enhanced + original images.
+    // onAttempt(model, index) fires before each attempt (for UI). Resolves to { books, model }.
+    // Used by both the normal and debug analyze paths so the request shape lives in one place.
+    async function callGeminiWithFallback(prompt, images, onAttempt) {
+      const parts = [
+        { text: prompt },
+        { inline_data: { mime_type: 'image/jpeg', data: images.enhanced } },
+        { inline_data: { mime_type: 'image/jpeg', data: images.original } },
+      ];
+      let lastErr = null;
+
+      for (let i = 0; i < GEMINI_MODELS.length; i++) {
+        const model = GEMINI_MODELS[i];
+        if (onAttempt) onAttempt(model, i);
+
+        let res;
+        try {
+          res = await fetch(GEMINI_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model, generationConfig: { temperature: 0 }, contents: [{ parts }] })
+          });
+        } catch (networkErr) {
+          lastErr = networkErr;
+          continue;   // network failure → try next model
+        }
+
+        // Quota / availability errors → try next model
+        if (res.status === 429 || res.status === 503 || res.status >= 500) {
+          const errText = await res.text().catch(() => '');
+          console.warn(`${model} returned ${res.status}, falling back…`, errText.slice(0, 200));
+          lastErr = new Error(`${model}: ${res.status}`);
+          continue;
+        }
+        if (!res.ok) {
+          const errText = await res.text();
+          console.error('Gemini error:', errText);
+          throw new Error(`API error ${res.status}: ${errText.slice(0, 200)}`);
+        }
+
+        // Success — parse, then reconcile spine_label vs author_last
+        const json  = await res.json();
+        const raw   = json.candidates[0].content.parts[0].text;
+        const books = JSON.parse(raw.replace(/```json|```/g, '').trim()).map(reconcileAuthorFields);
+        return { books, model };
+      }
+
+      throw lastErr || new Error('All models unavailable');
+    }
+
     async function analyzeShelf() {
       analyzeBtn.disabled    = true;
       analyzeBtn.textContent = 'Analyzing…';
       showLoading();
 
-      const images    = getResizedImageData();
-      const section   = getSection();
-      const prompt    = buildPrompt(section);
+      const images  = getResizedImageData();
+      const section = getSection();
+      const prompt  = buildPrompt(section);
       let success = false;
 
       try {
-        let lastErr = null;
-
-        for (let i = 0; i < GEMINI_MODELS.length; i++) {
-          const model = GEMINI_MODELS[i];
+        const { books, model } = await callGeminiWithFallback(prompt, images, (m, i) => {
           const loadText = document.querySelector('.loading-text');
           if (loadText) {
             loadText.textContent = i === 0
               ? 'READING SPINES…'
-              : `RETRYING WITH ${model.split('-').slice(1).join('-').toUpperCase()}…`;
+              : `RETRYING WITH ${m.split('-').slice(1).join('-').toUpperCase()}…`;
           }
-
-          let res;
-          try {
-            res = await fetch(GEMINI_URL, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                model,
-                generationConfig: { temperature: 0 },
-                contents: [{
-                  parts: [
-                    { text: prompt },
-                    { inline_data: { mime_type: 'image/jpeg', data: images.enhanced } },
-                    { inline_data: { mime_type: 'image/jpeg', data: images.original } }
-                  ]
-                }]
-              })
-            });
-          } catch (networkErr) {
-            lastErr = networkErr;
-            continue;   // network failure → try next model
-          }
-
-          // Quota / availability errors → try next model
-          if (res.status === 429 || res.status === 503 || res.status >= 500) {
-            const errText = await res.text().catch(() => '');
-            console.warn(`${model} returned ${res.status}, falling back…`, errText.slice(0, 200));
-            lastErr = new Error(`${model}: ${res.status}`);
-            continue;
-          }
-
-          if (!res.ok) {
-            const errText = await res.text();
-            console.error('Gemini error:', errText);
-            throw new Error(`API error ${res.status}: ${errText.slice(0, 200)}`);
-          }
-
-          // Success — parse the response
-          const json    = await res.json();
-          const raw     = json.candidates[0].content.parts[0].text;
-          const cleaned = raw.replace(/```json|```/g, '').trim();
-          let books     = JSON.parse(cleaned);
-
-          // Cross-field consistency: reconcile spine_label vs author_last
-          books = books.map(reconcileAuthorFields);
-
-          console.log(`Analysis succeeded with model: ${model}`);
-          success = true;
-          showResults(books, section);
-          return;   // done — exit the function
-        }
-
-        // All models exhausted
-        throw lastErr || new Error('All models unavailable');
+        });
+        console.log(`Analysis succeeded with model: ${model}`);
+        success = true;
+        showResults(books, section);
       } catch (err) {
         alert('Something went wrong: ' + err.message);
         analyzeBtn.disabled    = false;
@@ -2372,8 +2369,8 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       // Give UI a tick to update
       await new Promise(r => setTimeout(r, 50));
 
-      const t0      = performance.now();
-      const imageB64 = getResizedImageData();
+      const t0       = performance.now();
+      const images   = getResizedImageData();
       const procTime = Math.round(performance.now() - t0);
       const section  = getSection();
       const prompt   = buildPrompt(section);
@@ -2387,7 +2384,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       overlay.innerHTML = `
         <div class="debug-section">
           <div class="debug-section-title">Enhanced Image (sent to Gemini) · ${procTime}ms</div>
-          <img class="debug-img" src="data:image/jpeg;base64,${imageB64.enhanced || imageB64}" />
+          <img class="debug-img" src="data:image/jpeg;base64,${images.enhanced}" />
         </div>
         <div class="debug-section">
           <div class="debug-section-title">Prompt</div>
@@ -2423,45 +2420,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
 
         try {
           const apiT0 = performance.now();
-          let books = null;
-          let usedModel = '';
-
-          for (let i = 0; i < GEMINI_MODELS.length; i++) {
-            const model = GEMINI_MODELS[i];
-            const imgData = imageB64.enhanced || imageB64;
-            const parts = [
-              { text: prompt },
-              { inline_data: { mime_type: 'image/jpeg', data: imgData } },
-            ];
-            if (imageB64.original) {
-              parts.push({ inline_data: { mime_type: 'image/jpeg', data: imageB64.original } });
-            }
-
-            let res;
-            try {
-              res = await fetch(GEMINI_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  model,
-                  generationConfig: { temperature: 0 },
-                  contents: [{ parts }]
-                })
-              });
-            } catch { continue; }
-            if (res.status === 429 || res.status === 503 || res.status >= 500) continue;
-            if (!res.ok) throw new Error(`API error ${res.status}`);
-
-            const json = await res.json();
-            const raw = json.candidates[0].content.parts[0].text;
-            books = JSON.parse(raw.replace(/```json|```/g, '').trim());
-            books = books.map(reconcileAuthorFields);
-            usedModel = model;
-            break;
-          }
-
-          if (!books) throw new Error('All models unavailable');
-
+          const { books, model: usedModel } = await callGeminiWithFallback(prompt, images);
           const apiTime = Math.round(performance.now() - apiT0);
           const checked = checkOrder(books, section);
 
