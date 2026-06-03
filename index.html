@@ -293,6 +293,89 @@
     .badge-warn         { background: #450a0a; color: #f87171; }
     .badge-unverifiable { background: #713f12; color: #fde047; }
 
+    /* Inline error banner */
+    .error-banner {
+      position: absolute;
+      left: 12px; right: 12px;
+      bottom: 16px;
+      z-index: 26;
+      background: #450a0a;
+      border: 1px solid #7f1d1d;
+      border-radius: 12px;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+    .error-banner-msg { font-size: 13px; color: #fecaca; line-height: 1.4; }
+    .error-banner-retry {
+      flex-shrink: 0;
+      background: #ef4444;
+      border: none;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    /* First-run hint / legend */
+    .first-hint {
+      position: absolute;
+      inset: 0;
+      z-index: 24;
+      background: rgba(0,0,0,0.78);
+      backdrop-filter: blur(3px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 28px;
+    }
+    .first-hint-card {
+      background: #1c1c1c;
+      border: 1px solid #333;
+      border-radius: 16px;
+      padding: 22px 20px;
+      max-width: 320px;
+      text-align: left;
+    }
+    .first-hint-card h3 {
+      font-size: 16px;
+      color: #fff;
+      margin-bottom: 12px;
+      text-align: center;
+    }
+    .first-hint-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 11px;
+      font-size: 13px;
+      color: #ccc;
+      line-height: 1.4;
+    }
+    .first-hint-dot {
+      flex-shrink: 0;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      margin-top: 1px;
+    }
+    .first-hint-btn {
+      width: 100%;
+      margin-top: 8px;
+      background: #2563eb;
+      border: none;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 12px;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+
     .btn-new-scan {
       padding: 10px 20px;
       border-radius: 10px;
@@ -429,7 +512,22 @@
       color: #888;
     }
     .step-summary { color: #f87171; }
-    .step-counter { color: #888; font-variant-numeric: tabular-nums; }
+    .step-counter { color: #888; font-variant-numeric: tabular-nums; font-size: 12px; align-self: center; }
+    .step-list-btn {
+      background: #2c2c2c;
+      border: 1px solid #333;
+      color: #ddd;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .step-list-btn:active { transform: scale(0.96); }
+    .step-newscan-full {
+      width: 100%;
+      margin-top: 8px;
+    }
     .step-title {
       font-size: 17px;
       font-weight: 700;
@@ -475,8 +573,81 @@
       background: #2563eb;
       border-color: #2563eb;
       color: #fff;
-      flex: 1.2;
     }
+
+    /* Moves list view — flat list of all misplaced books */
+    .moves-list {
+      position: absolute;
+      inset: 0;
+      z-index: 28;
+      background: #0d0d0d;
+      display: flex;
+      flex-direction: column;
+    }
+    .moves-list-head {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      padding-top: max(14px, env(safe-area-inset-top));
+      border-bottom: 1px solid #2c2c2c;
+      font-size: 14px;
+      font-weight: 600;
+      color: #f87171;
+    }
+    .moves-close {
+      background: #2563eb;
+      border: none;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 7px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .moves-scroll {
+      flex: 1;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .moves-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      text-align: left;
+      padding: 12px 16px;
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid #1c1c1c;
+      cursor: pointer;
+      color: #eee;
+    }
+    .moves-item:active { background: #1c1c1c; }
+    .moves-pos {
+      flex-shrink: 0;
+      width: 30px; height: 30px;
+      border-radius: 50%;
+      background: #ef4444;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .moves-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .moves-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .moves-action { font-size: 12.5px; color: #aaa; }
+    .moves-action b { color: #93c5fd; }
 
     /* Tap-to-inspect popup */
     .book-inspect {
@@ -847,13 +1018,26 @@
     const cameraWrap    = document.getElementById('cameraWrap');
     const photoArea     = document.getElementById('photoArea');
     const zoomIndicator = document.getElementById('zoomIndicator');
-    // Section toggle
+    // Section toggle — remembers the last-used section across reloads.
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
+        try { localStorage.setItem('shelfcheck.section', btn.dataset.section); } catch {}
       });
     });
+
+    // Restore saved section on load
+    try {
+      const savedSection = localStorage.getItem('shelfcheck.section');
+      if (savedSection) {
+        const savedBtn = document.querySelector(`.tab-btn[data-section="${savedSection}"]`);
+        if (savedBtn) {
+          document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+          savedBtn.classList.add('active');
+        }
+      }
+    } catch {}
 
     // ── Camera + zoom setup ───────────────────────────────
     let videoTrack = null;
@@ -1503,12 +1687,34 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
         success = true;
         showResults(books, section);
       } catch (err) {
-        alert('Something went wrong: ' + err.message);
+        const offline = !navigator.onLine || /Failed to fetch|NetworkError/i.test(err.message);
+        showErrorBanner(
+          offline ? "Couldn't reach the server. Check your connection." : `Analysis failed: ${err.message}`,
+          () => analyzeShelf()
+        );
         analyzeBtn.disabled    = false;
         analyzeBtn.textContent = 'Analyze';
       } finally {
         hideLoading(success);
       }
+    }
+
+    // Inline error banner with a Retry button — replaces blocking alert() popups.
+    function showErrorBanner(message, onRetry) {
+      document.getElementById('errorBanner')?.remove();
+      const banner = document.createElement('div');
+      banner.id = 'errorBanner';
+      banner.className = 'error-banner';
+      banner.innerHTML = `
+        <span class="error-banner-msg">${escapeHtml(message)}</span>
+        <button class="error-banner-retry" id="errBannerRetry">Retry</button>`;
+      photoArea.appendChild(banner);
+      document.getElementById('errBannerRetry').onclick = () => {
+        banner.remove();
+        onRetry();
+      };
+      // Auto-dismiss after 8s if ignored
+      setTimeout(() => banner.remove(), 8000);
     }
 
     // ── Ordering logic ────────────────────────────────────
@@ -2078,28 +2284,48 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
         .filter(b => b.bounding_box && b.outOfOrder)
         .sort((a, b) => (a.shelfPosition ?? 0) - (b.shelfPosition ?? 0));
 
+      const total    = checked.length;
       const outCount = checked.filter(b => b.outOfOrder).length;
       const unvCount = checked.filter(b => b.unverifiable).length;
 
       actionBtns.classList.remove('show');
+
+      // No books detected — don't claim "all in order". Prompt a retake instead.
+      if (total === 0) {
+        showNoBooksBadge();
+        return;
+      }
+
       enableInspect();
 
       // Render persistent yellow markers for unverifiable books
       renderUnverifiableMarkers();
 
       if (stepIssues.length === 0) {
-        showSimpleBadge(outCount, unvCount);
+        showSimpleBadge(total, outCount, unvCount);
       } else {
         stepCursor = 0;
-        showStepThrough(outCount, unvCount);
+        showStepThrough(total, outCount, unvCount);
       }
     }
 
-    function showSimpleBadge(outCount, unvCount) {
+    // Shown when Gemini detected zero books (blurry/dark/empty photo or a misfire).
+    function showNoBooksBadge() {
+      const overlay = document.createElement('div');
+      overlay.id        = 'resultsOverlay';
+      overlay.className = 'results-overlay';
+      overlay.innerHTML = `
+        <div class="overlay-badge badge-warn">No books detected — retake</div>
+        <button class="btn-new-scan" onclick="newScan()">Retake</button>`;
+      photoArea.appendChild(overlay);
+    }
+
+    function showSimpleBadge(total, outCount, unvCount) {
+      const readLabel = `${total} read`;
       let badgeClass, badgeText;
-      if (outCount > 0)       { badgeClass = 'badge-warn';         badgeText = `⚠ ${outCount} to move`; }
-      else if (unvCount > 0)  { badgeClass = 'badge-unverifiable'; badgeText = `⚠ ${unvCount} unverifiable`; }
-      else                    { badgeClass = 'badge-ok';           badgeText = '✓ All in order'; }
+      if (outCount > 0)       { badgeClass = 'badge-warn';         badgeText = `⚠ ${outCount} to move · ${readLabel}`; }
+      else if (unvCount > 0)  { badgeClass = 'badge-unverifiable'; badgeText = `⚠ ${unvCount} unverifiable · ${readLabel}`; }
+      else                    { badgeClass = 'badge-ok';           badgeText = `✓ All ${total} in order`; }
 
       const overlay = document.createElement('div');
       overlay.id        = 'resultsOverlay';
@@ -2110,12 +2336,14 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       photoArea.appendChild(overlay);
     }
 
-    function showStepThrough(outCount, unvCount) {
+    function showStepThrough(total, outCount, unvCount) {
       const container = document.createElement('div');
       container.id = 'stepThrough';
-      const summary = outCount > 0
-        ? `${outCount} to move${unvCount ? ` · ${unvCount} unverifiable` : ''}`
-        : `${unvCount} unverifiable`;
+      const parts = [];
+      if (outCount > 0) parts.push(`${outCount} to move`);
+      if (unvCount > 0) parts.push(`${unvCount} unverifiable`);
+      parts.push(`${total} read`);
+      const summary = parts.join(' · ');
       container.innerHTML = `
         <div class="step-arrow" id="stepArrow">
           <div class="step-arrow-num" id="stepArrowNum">1</div>
@@ -2128,16 +2356,17 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
         <div class="step-card" id="stepCard">
           <div class="step-card-top">
             <span class="step-summary">${summary}</span>
-            <span class="step-counter" id="stepCounter"></span>
+            <button class="step-list-btn" id="stepListBtn">☰ List</button>
           </div>
           <div class="step-title" id="stepTitle">—</div>
           <div class="step-meta" id="stepMeta">—</div>
           <div class="step-action" id="stepAction">—</div>
           <div class="step-nav">
             <button class="step-btn" id="stepPrev">← Prev</button>
-            <button class="step-btn step-btn-primary" id="stepNewScan">New Scan</button>
+            <span class="step-counter" id="stepCounter"></span>
             <button class="step-btn" id="stepNext">Next →</button>
           </div>
+          <button class="step-btn step-btn-primary step-newscan-full" id="stepNewScan">New Scan</button>
         </div>`;
       cameraWrap.appendChild(container);
 
@@ -2150,8 +2379,57 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
         renderStep();
       };
       document.getElementById('stepNewScan').onclick = newScan;
+      document.getElementById('stepListBtn').onclick = showMovesList;
 
       renderStep();
+    }
+
+    // Flat list of every misplaced book in shelf order — faster than stepping one-by-one.
+    // Tapping an item jumps the step-through to that book.
+    function showMovesList() {
+      document.getElementById('movesList')?.remove();
+      const overlay = document.createElement('div');
+      overlay.id = 'movesList';
+      overlay.className = 'moves-list';
+
+      let rows = '';
+      stepIssues.forEach((b, idx) => {
+        const dir = (b.idealPosition && b.shelfPosition)
+          ? (b.idealPosition < b.shelfPosition ? 'LEFT' : 'RIGHT')
+          : '';
+        const dest = (b.outOfOrder && b.idealPosition && b.shelfPosition)
+          ? lastCheckedBooks.find(d => d.shelfIndex === b.shelfIndex && d.shelfPosition === b.idealPosition)
+          : null;
+        const destName = dest ? (dest.title || dest.spine_label || (dest.author_last ? `${dest.author_last}'s book` : '')) : '';
+        const action = dir
+          ? `Move <b>${dir}</b>${destName ? ` — before ${escapeHtml(String(destName))}` : ''}`
+          : 'Out of order';
+        rows += `
+          <button class="moves-item" data-idx="${idx}">
+            <span class="moves-pos">${b.shelfPosition ?? '?'}</span>
+            <span class="moves-body">
+              <span class="moves-title">${escapeHtml(b.title) || '(unreadable)'}</span>
+              <span class="moves-action">${action}</span>
+            </span>
+          </button>`;
+      });
+
+      overlay.innerHTML = `
+        <div class="moves-list-head">
+          <span>${stepIssues.length} book${stepIssues.length === 1 ? '' : 's'} to move</span>
+          <button class="moves-close" id="movesClose">Done</button>
+        </div>
+        <div class="moves-scroll">${rows}</div>`;
+      cameraWrap.appendChild(overlay);
+
+      document.getElementById('movesClose').onclick = () => overlay.remove();
+      overlay.querySelectorAll('.moves-item').forEach(item => {
+        item.onclick = () => {
+          stepCursor = parseInt(item.dataset.idx, 10);
+          renderStep();
+          overlay.remove();
+        };
+      });
     }
 
     function renderStep() {
@@ -2326,6 +2604,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       document.getElementById('stepThrough')?.remove();
       document.getElementById('unvMarkers')?.remove();
       document.getElementById('debugOverlay')?.remove();
+      document.getElementById('movesList')?.remove();
       stepIssues = [];
       disableInspect();
       retake();
@@ -2714,8 +2993,45 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       return { pass, fail };
     }
 
+    // First-run hint / legend — shown once, explains framing + result colors.
+    function maybeShowFirstHint() {
+      let seen = false;
+      try { seen = localStorage.getItem('shelfcheck.hintSeen') === '1'; } catch {}
+      if (seen) return;
+
+      const hint = document.createElement('div');
+      hint.className = 'first-hint';
+      hint.innerHTML = `
+        <div class="first-hint-card">
+          <h3>How ShelfCheck works</h3>
+          <div class="first-hint-row">
+            <span class="first-hint-dot" style="background:#3b82f6"></span>
+            <span>Frame one shelf — or a full top-to-bottom column — in the box and tap the shutter.</span>
+          </div>
+          <div class="first-hint-row">
+            <span class="first-hint-dot" style="background:#ef4444"></span>
+            <span><b>Red</b> = out of order. The arrow shows where to move it.</span>
+          </div>
+          <div class="first-hint-row">
+            <span class="first-hint-dot" style="background:#facc15"></span>
+            <span><b>Yellow ?</b> = couldn't read the spine clearly — check it by eye.</span>
+          </div>
+          <div class="first-hint-row">
+            <span class="first-hint-dot" style="background:#4ade80"></span>
+            <span><b>Green</b> = in order. Tap any book to see what was read.</span>
+          </div>
+          <button class="first-hint-btn" id="firstHintBtn">Got it</button>
+        </div>`;
+      photoArea.appendChild(hint);
+      document.getElementById('firstHintBtn').onclick = () => {
+        hint.remove();
+        try { localStorage.setItem('shelfcheck.hintSeen', '1'); } catch {}
+      };
+    }
+
     // Auto-start camera on load
     startCamera();
+    maybeShowFirstHint();
   </script>
 
 </body>
