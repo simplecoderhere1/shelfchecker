@@ -1149,8 +1149,8 @@
     // Try best model first; fall back automatically on quota / availability errors.
     // The Worker reads the `model` field and substitutes it into the Gemini API URL.
     const GEMINI_MODELS = [
-      'gemini-3.5-flash',      // primary
-      'gemini-3.1-flash-lite', // fallback
+      'gemini-3.1-flash-lite', // primary — fastest
+      'gemini-3.5-flash',      // fallback
       'gemini-2.5-flash',      // safety net (known-good) if the 3.x IDs are unavailable
     ];
 
