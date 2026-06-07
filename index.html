@@ -94,6 +94,7 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
+      transform-origin: center center;
     }
 
     #snapshot {
@@ -103,79 +104,6 @@
       height: 100%;
       object-fit: contain;
       display: none;
-    }
-
-    /* Guide overlay */
-    .guide {
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      z-index: 10;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .guide-box {
-      width: 94%;
-      aspect-ratio: 3 / 4;
-      border: 1.5px solid rgba(255, 255, 255, 0.35);
-      border-radius: 6px;
-      position: relative;
-      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.30);
-    }
-
-    .guide-box::before {
-      content: '';
-      position: absolute;
-      top: -2px; left: -2px;
-      width: 18px; height: 18px;
-      border-top: 2.5px solid rgba(255, 255, 255, 0.85);
-      border-left: 2.5px solid rgba(255, 255, 255, 0.85);
-      border-radius: 3px 0 0 0;
-    }
-    .guide-box::after {
-      content: '';
-      position: absolute;
-      bottom: -2px; right: -2px;
-      width: 18px; height: 18px;
-      border-bottom: 2.5px solid rgba(255, 255, 255, 0.85);
-      border-right: 2.5px solid rgba(255, 255, 255, 0.85);
-      border-radius: 0 0 3px 0;
-    }
-    .guide-box > i {
-      display: block;
-      position: absolute;
-      inset: 0;
-    }
-    .guide-box > i::before {
-      content: '';
-      position: absolute;
-      top: -2px; right: -2px;
-      width: 18px; height: 18px;
-      border-top: 2.5px solid rgba(255, 255, 255, 0.85);
-      border-right: 2.5px solid rgba(255, 255, 255, 0.85);
-      border-radius: 0 3px 0 0;
-    }
-    .guide-box > i::after {
-      content: '';
-      position: absolute;
-      bottom: -2px; left: -2px;
-      width: 18px; height: 18px;
-      border-bottom: 2.5px solid rgba(255, 255, 255, 0.85);
-      border-left: 2.5px solid rgba(255, 255, 255, 0.85);
-      border-radius: 0 0 0 3px;
-    }
-
-    .guide-label {
-      position: absolute;
-      bottom: -28px;
-      left: 50%;
-      transform: translateX(-50%);
-      font-size: 11px;
-      color: rgba(255, 255, 255, 0.38);
-      letter-spacing: 0.07em;
-      white-space: nowrap;
     }
 
     /* Camera error state */
@@ -976,12 +904,6 @@
       <video id="video" autoplay playsinline muted></video>
       <canvas id="snapshot"></canvas>
       <div class="zoom-indicator" id="zoomIndicator"></div>
-      <div class="guide" id="guide">
-        <div class="guide-box">
-          <i></i>
-          <span class="guide-label">Frame the shelf here</span>
-        </div>
-      </div>
 
       <div class="cam-error" id="camError">
         <svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 24 24"
@@ -1013,7 +935,6 @@
     const actionBtns    = document.getElementById('actionBtns');
     const retakeBtn     = document.getElementById('retakeBtn');
     const analyzeBtn    = document.getElementById('analyzeBtn');
-    const guide         = document.getElementById('guide');
     const camError      = document.getElementById('camError');
     const cameraWrap    = document.getElementById('cameraWrap');
     const photoArea     = document.getElementById('photoArea');
@@ -1063,7 +984,6 @@
         }
       } catch {
         video.style.display = 'none';
-        guide.style.display = 'none';
         camError.classList.add('show');
         captureBtn.disabled      = true;
         captureBtn.style.opacity = '0.35';
@@ -1080,6 +1000,9 @@
       return Math.sqrt(dx * dx + dy * dy);
     }
 
+    let digitalZoom = 1;
+    const DIGITAL_ZOOM_MIN = 0.3;
+
     function showZoom(zoom, atMin) {
       zoomIndicator.textContent = zoom.toFixed(1) + '×' + (atMin ? ' (min)' : '');
       zoomIndicator.style.opacity = '1';
@@ -1088,10 +1011,27 @@
     }
 
     function applyZoom(newZoom) {
-      if (!zoomCaps || !videoTrack) return;
-      currentZoom = Math.min(zoomCaps.max, Math.max(zoomCaps.min, newZoom));
-      videoTrack.applyConstraints({ advanced: [{ zoom: currentZoom }] }).catch(() => {});
-      showZoom(currentZoom, newZoom < zoomCaps.min);
+      if (!videoTrack) return;
+
+      if (zoomCaps && newZoom >= zoomCaps.min) {
+        // Hardware zoom range — clear any digital zoom-out
+        digitalZoom = 1;
+        video.style.transform = '';
+        currentZoom = Math.min(zoomCaps.max, newZoom);
+        videoTrack.applyConstraints({ advanced: [{ zoom: currentZoom }] }).catch(() => {});
+        showZoom(currentZoom, false);
+      } else {
+        // Digital zoom-out below hardware min — shrink video via CSS transform
+        const hwMin = zoomCaps ? zoomCaps.min : 1;
+        if (zoomCaps) {
+          videoTrack.applyConstraints({ advanced: [{ zoom: hwMin }] }).catch(() => {});
+        }
+        digitalZoom = Math.max(DIGITAL_ZOOM_MIN, newZoom / hwMin);
+        currentZoom = hwMin;
+        video.style.transform = `scale(${digitalZoom})`;
+        const effectiveZoom = hwMin * digitalZoom;
+        showZoom(effectiveZoom, newZoom / hwMin <= DIGITAL_ZOOM_MIN);
+      }
     }
 
     cameraWrap.addEventListener('touchstart', e => {
@@ -1104,8 +1044,9 @@
       const delta = dist / lastPinchDist;
       lastPinchDist = dist;
 
-      if (zoomCaps && videoTrack) {
-        applyZoom(currentZoom * delta);
+      if (videoTrack) {
+        const effectiveZoom = currentZoom * digitalZoom;
+        applyZoom(effectiveZoom * delta);
       }
     }, { passive: true });
 
@@ -1113,7 +1054,7 @@
       if (e.touches.length < 2) lastPinchDist = null;
     }, { passive: true });
 
-    // ── Capture: crop to guide box ───────────────────────
+    // ── Capture: full visible area ───────────────────────
     function capture() {
       const cw  = photoArea.clientWidth;
       const ch  = photoArea.clientHeight;
@@ -1121,30 +1062,28 @@
       const vw  = video.videoWidth  || cw;
       const vh  = video.videoHeight || ch;
 
-      // Guide box dimensions in screen coords (matches CSS: width 94%, aspect 3:4)
-      const gwScreen = cw * 0.94;
-      const ghScreen = gwScreen * 4 / 3;
-      const gxScreen = cw * 0.03;
-      const gyScreen = (ch - ghScreen) / 2;
+      if (digitalZoom < 1) {
+        // Digital zoom-out: capture the full sensor frame
+        snapshot.width  = vw;
+        snapshot.height = vh;
+        snapshot.getContext('2d').drawImage(video, 0, 0, vw, vh);
+      } else {
+        // Normal / hardware-zoomed: object-fit:cover crops some pixels.
+        // Capture only the visible region.
+        const scale = Math.max(cw / vw, ch / vh);
+        const visW  = cw / scale;
+        const visH  = ch / scale;
+        const sx    = (vw - visW) / 2;
+        const sy    = (vh - visH) / 2;
 
-      // Video is displayed with object-fit:cover — map screen back to video coords
-      const scale     = Math.max(cw / vw, ch / vh);
-      const offsetX   = (cw - vw * scale) / 2;
-      const offsetY   = (ch - vh * scale) / 2;
-      const gxVideo   = (gxScreen - offsetX) / scale;
-      const gyVideo   = (gyScreen - offsetY) / scale;
-      const gwVideo   = gwScreen / scale;
-      const ghVideo   = ghScreen / scale;
-
-      // Canvas at display-pixel resolution, matching guide aspect ratio
-      snapshot.width  = Math.round(gwScreen * dpr);
-      snapshot.height = Math.round(ghScreen * dpr);
-
-      snapshot.getContext('2d').drawImage(
-        video,
-        gxVideo, gyVideo, gwVideo, ghVideo,
-        0, 0, snapshot.width, snapshot.height
-      );
+        snapshot.width  = Math.round(cw * dpr);
+        snapshot.height = Math.round(ch * dpr);
+        snapshot.getContext('2d').drawImage(
+          video,
+          sx, sy, visW, visH,
+          0, 0, snapshot.width, snapshot.height
+        );
+      }
 
       // Flash animation
       const flash = document.createElement('div');
@@ -1153,7 +1092,6 @@
       flash.addEventListener('animationend', () => flash.remove());
 
       snapshot.style.display   = 'block';
-      guide.style.display      = 'none';
       captureBtn.style.display = 'none';
       actionBtns.classList.add('show');
       analyzeBtn.disabled = false;
@@ -1163,9 +1101,10 @@
     function retake() {
       snapshot.style.display   = 'none';
       video.style.display      = '';
-      guide.style.display      = '';
       captureBtn.style.display = '';
       captureBtn.disabled      = false;
+      digitalZoom = 1;
+      video.style.transform    = '';
       actionBtns.classList.remove('show');
       analyzeBtn.disabled      = true;
       analyzeBtn.textContent   = 'Analyze';
@@ -3006,7 +2945,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
           <h3>How ShelfCheck works</h3>
           <div class="first-hint-row">
             <span class="first-hint-dot" style="background:#3b82f6"></span>
-            <span>Frame one shelf — or a full top-to-bottom column — in the box and tap the shutter.</span>
+            <span>Point at a shelf and tap the shutter. Pinch to zoom in or out.</span>
           </div>
           <div class="first-hint-row">
             <span class="first-hint-dot" style="background:#ef4444"></span>
