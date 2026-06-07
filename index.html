@@ -875,6 +875,58 @@
       cursor: not-allowed;
       transform: none;
     }
+
+    /* ── Landscape layout ────────────────────────────────
+       In landscape the vertical stack wastes height. Flip to a row:
+       left sidebar (section tabs + settings) | camera | right sidebar (shutter).
+       The camera area fills all remaining width so you see the full shelf.
+    ─────────────────────────────────────────────────── */
+    @media (orientation: landscape) {
+      body { flex-direction: row; }
+
+      /* Left sidebar */
+      .header {
+        flex-direction: column;
+        width: auto;
+        border-bottom: none;
+        border-right: 1px solid #2c2c2c;
+        padding: 8px;
+        padding-top: max(8px, env(safe-area-inset-top));
+        padding-left: max(8px, env(safe-area-inset-left));
+        gap: 10px;
+        justify-content: flex-start;
+        align-items: center;
+      }
+      .app-name { display: none; }
+      .section-tabs { flex-direction: column; }
+      .tab-btn { padding: 6px 10px; font-size: 12px; }
+
+      /* Right sidebar */
+      .footer {
+        flex-direction: column;
+        width: auto;
+        min-height: 0;
+        border-top: none;
+        border-left: 1px solid #2c2c2c;
+        padding: 16px 10px;
+        padding-right: max(10px, env(safe-area-inset-right));
+        padding-bottom: max(16px, env(safe-area-inset-bottom));
+        justify-content: center;
+        gap: 12px;
+      }
+      .action-btns { flex-direction: column; }
+      .btn { padding: 10px 16px; font-size: 13px; }
+
+      /* Step card: shrink it in landscape so it doesn't eat too much height */
+      .step-card {
+        padding: 10px 14px;
+        padding-bottom: max(10px, env(safe-area-inset-bottom));
+      }
+      .step-title { font-size: 15px; }
+      .step-action { font-size: 12px; padding: 8px 10px; margin-top: 7px; }
+      .step-nav { margin-top: 8px; }
+      .step-btn { padding: 9px 0; font-size: 13px; }
+    }
   </style>
 </head>
 <body>
@@ -964,31 +1016,9 @@
     let zoomCaps   = null;
     let currentZoom = 1;
 
-    // Multi-lens state. The main lens handles 1× and zooming IN (hardware zoom).
-    // Zooming OUT past 1× switches to the phone's ultra-wide lens, if it has one.
-    let mainDeviceId      = null;
-    let ultraWideDeviceId = null;
-    let currentLens       = 'main';   // 'main' | 'ultrawide'
-    let switchingLens     = false;
-
-    // Open a stream from the given constraints, swapping out any current stream.
-    async function openStream(constraints) {
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      if (video.srcObject) {
-        video.srcObject.getTracks().forEach(t => t.stop());
-      }
-      video.srcObject = stream;
-      videoTrack = stream.getVideoTracks()[0];
-      const caps = videoTrack.getCapabilities?.() || {};
-      zoomCaps = caps.zoom || null;
-      currentZoom = zoomCaps ? (zoomCaps.min || 1) : 1;
-      video.play?.().catch(() => {});
-      return stream;
-    }
-
     async function startCamera() {
       try {
-        await openStream({
+        const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: 'environment' },
             width:  { ideal: 3840 },
@@ -996,9 +1026,12 @@
           },
           audio: false,
         });
-        currentLens  = 'main';
-        mainDeviceId = videoTrack.getSettings?.().deviceId || null;
-        detectUltraWide();
+        video.srcObject = stream;
+        videoTrack = stream.getVideoTracks()[0];
+        const caps = videoTrack.getCapabilities?.() || {};
+        zoomCaps = caps.zoom || null;
+        currentZoom = 1;
+        video.play?.().catch(() => {});
       } catch {
         video.style.display = 'none';
         camError.classList.add('show');
@@ -1007,65 +1040,7 @@
       }
     }
 
-    // Find an ultra-wide back camera by label. Labels are only populated after
-    // camera permission is granted, so this runs after startCamera() succeeds.
-    // iOS exposes "Back Ultra Wide Camera"; some Android labels include "ultra"
-    // or "0.5". If none is found, ultraWideDeviceId stays null and zoom-out
-    // simply stops at 1× (no fake zoom).
-    async function detectUltraWide() {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const cams = devices.filter(d => d.kind === 'videoinput');
-        const backCams = cams.filter(d => /back|rear|environment/i.test(d.label));
-        const pool = backCams.length ? backCams : cams;
-        const uw = pool.find(d =>
-          d.deviceId !== mainDeviceId && /ultra[\s-]?wide|ultrawide|\b0\.5\b/i.test(d.label)
-        );
-        ultraWideDeviceId = uw ? uw.deviceId : null;
-      } catch {
-        ultraWideDeviceId = null;
-      }
-    }
-
-    async function switchToUltraWide() {
-      if (!ultraWideDeviceId || switchingLens || currentLens === 'ultrawide') return;
-      switchingLens = true;
-      try {
-        await openStream({
-          video: { deviceId: { exact: ultraWideDeviceId },
-                   width: { ideal: 3840 }, height: { ideal: 2160 } },
-          audio: false,
-        });
-        currentLens = 'ultrawide';
-        if (zoomCaps) applyHardwareZoom(zoomCaps.min);  // keep ultra-wide at its widest
-        showZoom(0.5, true);
-      } catch {
-        await switchToMain();
-      } finally {
-        switchingLens = false;
-      }
-    }
-
-    async function switchToMain() {
-      if (switchingLens || currentLens === 'main') return;
-      switchingLens = true;
-      try {
-        const constraints = mainDeviceId
-          ? { video: { deviceId: { exact: mainDeviceId },
-                       width: { ideal: 3840 }, height: { ideal: 2160 } }, audio: false }
-          : { video: { facingMode: { ideal: 'environment' },
-                       width: { ideal: 3840 }, height: { ideal: 2160 } }, audio: false };
-        await openStream(constraints);
-        currentLens = 'main';
-        showZoom(currentZoom, !zoomCaps || currentZoom <= zoomCaps.min);
-      } catch {
-        /* keep whatever stream we have */
-      } finally {
-        switchingLens = false;
-      }
-    }
-
-    // ── Pinch to zoom ─────────────────────────────────────
+    // ── Pinch to zoom in ──────────────────────────────────
     let lastPinchDist = null;
     let zoomHideTimer = null;
 
@@ -1075,18 +1050,18 @@
       return Math.sqrt(dx * dx + dy * dy);
     }
 
-    function showZoom(zoom, atMin) {
-      zoomIndicator.textContent = zoom.toFixed(1) + '×' + (atMin ? ' (min)' : '');
+    function showZoom(zoom) {
+      zoomIndicator.textContent = zoom.toFixed(1) + '×';
       zoomIndicator.style.opacity = '1';
       clearTimeout(zoomHideTimer);
       zoomHideTimer = setTimeout(() => zoomIndicator.style.opacity = '0', 1500);
     }
 
-    // Apply hardware (optical/sensor) zoom on the current lens, clamped to caps.
     function applyHardwareZoom(newZoom) {
       if (!zoomCaps || !videoTrack) return;
       currentZoom = Math.min(zoomCaps.max, Math.max(zoomCaps.min, newZoom));
       videoTrack.applyConstraints({ advanced: [{ zoom: currentZoom }] }).catch(() => {});
+      showZoom(currentZoom);
     }
 
     cameraWrap.addEventListener('touchstart', e => {
@@ -1094,30 +1069,13 @@
     }, { passive: true });
 
     cameraWrap.addEventListener('touchmove', e => {
-      if (e.touches.length !== 2 || lastPinchDist === null) return;
+      if (e.touches.length !== 2 || lastPinchDist === null || !zoomCaps) return;
       const dist  = getPinchDist(e.touches);
       const delta = dist / lastPinchDist;
       lastPinchDist = dist;
-      if (switchingLens || !videoTrack) return;
-
-      if (currentLens === 'ultrawide') {
-        // On the ultra-wide lens any pinch-in returns to the main lens (1×).
-        if (delta > 1.02) switchToMain();
-        return;
-      }
-
-      // Main lens.
-      const atMin = !zoomCaps || currentZoom <= zoomCaps.min + 1e-3;
-      if (atMin && delta < 0.98 && ultraWideDeviceId) {
-        // Already at the widest the main lens allows and still pinching out →
-        // switch to the ultra-wide lens for a wider view.
-        switchToUltraWide();
-        return;
-      }
-      if (zoomCaps) {
-        applyHardwareZoom(currentZoom * delta);
-        showZoom(currentZoom, currentZoom <= zoomCaps.min);
-      }
+      // Ignore tiny jitter; only zoom in (delta > 1), clamp out to minimum
+      if (Math.abs(delta - 1) < 0.01) return;
+      applyHardwareZoom(currentZoom * delta);
     }, { passive: true });
 
     cameraWrap.addEventListener('touchend', e => {
