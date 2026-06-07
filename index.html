@@ -1149,9 +1149,9 @@
     // Try best model first; fall back automatically on quota / availability errors.
     // The Worker reads the `model` field and substitutes it into the Gemini API URL.
     const GEMINI_MODELS = [
-      'gemini-2.5-pro',        // best vision + reasoning
-      'gemini-2.5-flash',      // fast, very capable
-      'gemini-2.5-flash-lite', // cheapest, most available
+      'gemini-3.5-flash',      // primary
+      'gemini-3.1-flash-lite', // fallback
+      'gemini-2.5-flash',      // safety net (known-good) if the 3.x IDs are unavailable
     ];
 
     function getSection() {
@@ -1179,7 +1179,7 @@ For each spine, return:
 READING TIPS for accuracy:
 - DISTINGUISH title from author: The TITLE is the name of the book (e.g. "Murder in Clichy", "Maximum Ride"). The AUTHOR is the person who wrote it (e.g. "Black", "Patterson"). Many spines print the author name larger than the title — do not confuse them. The library sticker almost always has the author surname; use it to verify author_last.
 - Start with the white library sticker at the BOTTOM of each spine — it is pre-printed and is the most reliable text. Read it line by line: top line is usually SURNAME in all caps, second line is first name, third line (if present) is series name, fourth line is volume number.
-- If a spine is hard to read, use its NEIGHBORS as context: books on a library shelf are roughly alphabetical by author surname. If the spines around a book all say "BLACK", the hard-to-read one is very likely "BLACK" too.
+- If a spine is genuinely hard to read, return null for the unclear field — do NOT copy the author or title from a neighboring spine. The whole purpose is to find shelving mistakes, so assuming a book matches its neighbors hides the very errors we are looking for. An honest null (shown to the user as "unverifiable") is always better than a borrowed guess.
 - Spine text is often rotated 90 degrees. Read carefully — do not confuse letters like "d/p", "b/q", "m/w" that look alike when rotated.
 - COMMON OCR TRAPS: "rn" looks like "m", "cl" looks like "d", "I" vs "l" vs "1", "O" vs "0". When in doubt, cross-check with the sticker text.
 - Return null for any field you cannot read clearly. Do NOT guess — a wrong value is worse than null.
@@ -2054,6 +2054,25 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       return fixed;
     }
 
+    // Levenshtein edit distance between two strings (small inputs — simple DP).
+    // Used to detect OCR near-twin surnames like "waldron" vs "waldman" (distance 2).
+    function editDistance(a, b) {
+      a = a || ''; b = b || '';
+      const m = a.length, n = b.length;
+      if (m === 0) return n;
+      if (n === 0) return m;
+      let prev = Array.from({ length: n + 1 }, (_, j) => j);
+      for (let i = 1; i <= m; i++) {
+        const cur = [i];
+        for (let j = 1; j <= n; j++) {
+          const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+          cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+        }
+        prev = cur;
+      }
+      return prev[n];
+    }
+
     // Check order for a single shelf of books (already sorted left→right within the shelf).
     function checkOrderOneShelf(books, section) {
       const keys = books.map(b => sortKey(b, section));
@@ -2153,6 +2172,24 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
             const farFromR = Math.abs(valM.charCodeAt(0) - valR.charCodeAt(0)) >= 3;
             if (neighborsClose && farFromL && farFromR) {
               demote = true;
+            }
+          }
+        }
+
+        // Rule 3: OCR near-twin. The flagged surname is a near-match (edit distance ≤2)
+        // of an adjacent verifiable surname — e.g. "waldron" vs "waldman". This is far
+        // more likely a misread than a genuine misplacement, so demote to unverifiable.
+        // Restricted to surnames ≥5 chars so short names ("kane"/"lane") don't false-trigger.
+        if (!demote && kM.kind === 'str') {
+          const valM = kM.val || '';
+          for (const kN of [kL, kR]) {
+            if (kN.kind !== 'str') continue;
+            const valN = kN.val || '';
+            if (Math.min(valM.length, valN.length) >= 5 &&
+                valM !== valN &&
+                editDistance(valM, valN) <= 2) {
+              demote = true;
+              break;
             }
           }
         }
