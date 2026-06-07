@@ -665,6 +665,26 @@
       pointer-events: none;
     }
 
+    /* On-screen timing readout (Debug Mode only) — shows where each scan spends time */
+    .timing-badge {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 40;
+      background: rgba(0, 0, 0, 0.85);
+      border: 1px solid #dc2626;
+      color: #fff;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      padding: 8px 14px;
+      border-radius: 10px;
+      text-align: center;
+      line-height: 1.5;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    }
+    .timing-badge b { color: #f87171; }
+
     .settings-btn {
       background: transparent;
       border: none;
@@ -1642,12 +1662,15 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       analyzeBtn.textContent = 'Analyzing…';
       showLoading();
 
+      const tPrep0  = performance.now();
       const images  = getResizedImageData();
+      const procTime = Math.round(performance.now() - tPrep0);
       const section = getSection();
       const prompt  = buildPrompt(section);
       let success = false;
 
       try {
+        const tApi0 = performance.now();
         const { books, model } = await callGeminiWithFallback(prompt, images, (m, i) => {
           const loadText = document.querySelector('.loading-text');
           if (loadText) {
@@ -1656,9 +1679,11 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
               : `RETRYING WITH ${m.split('-').slice(1).join('-').toUpperCase()}…`;
           }
         });
+        const apiTime = Math.round(performance.now() - tApi0);
         console.log(`Analysis succeeded with model: ${model}`);
         success = true;
         showResults(books, section);
+        if (debugMode) showTimingBadge(procTime, apiTime, model);
       } catch (err) {
         const offline = !navigator.onLine || /Failed to fetch|NetworkError/i.test(err.message);
         showErrorBanner(
@@ -1670,6 +1695,23 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       } finally {
         hideLoading(success);
       }
+    }
+
+    // On-screen timing readout for Debug Mode: prep (CPU image pipeline) vs model
+    // (network + inference) vs total. Tap to dismiss; auto-hides after 12s.
+    function showTimingBadge(procTime, apiTime, model) {
+      document.getElementById('timingBadge')?.remove();
+      const fmt   = ms => (ms / 1000).toFixed(1) + 's';
+      const total = procTime + apiTime;
+      const badge = document.createElement('div');
+      badge.id        = 'timingBadge';
+      badge.className = 'timing-badge';
+      badge.innerHTML =
+        `⏱ prep <b>${fmt(procTime)}</b> · model <b>${fmt(apiTime)}</b> · total <b>${fmt(total)}</b>` +
+        `<br><span style="color:#aaa">${escapeHtml(model)}</span>`;
+      photoArea.appendChild(badge);
+      badge.onclick = () => badge.remove();
+      setTimeout(() => badge.remove(), 12000);
     }
 
     // Inline error banner with a Retry button — replaces blocking alert() popups.
