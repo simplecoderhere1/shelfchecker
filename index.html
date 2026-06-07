@@ -94,7 +94,6 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
-      transform-origin: center center;
     }
 
     #snapshot {
@@ -965,9 +964,31 @@
     let zoomCaps   = null;
     let currentZoom = 1;
 
+    // Multi-lens state. The main lens handles 1× and zooming IN (hardware zoom).
+    // Zooming OUT past 1× switches to the phone's ultra-wide lens, if it has one.
+    let mainDeviceId      = null;
+    let ultraWideDeviceId = null;
+    let currentLens       = 'main';   // 'main' | 'ultrawide'
+    let switchingLens     = false;
+
+    // Open a stream from the given constraints, swapping out any current stream.
+    async function openStream(constraints) {
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      if (video.srcObject) {
+        video.srcObject.getTracks().forEach(t => t.stop());
+      }
+      video.srcObject = stream;
+      videoTrack = stream.getVideoTracks()[0];
+      const caps = videoTrack.getCapabilities?.() || {};
+      zoomCaps = caps.zoom || null;
+      currentZoom = zoomCaps ? (zoomCaps.min || 1) : 1;
+      video.play?.().catch(() => {});
+      return stream;
+    }
+
     async function startCamera() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+        await openStream({
           video: {
             facingMode: { ideal: 'environment' },
             width:  { ideal: 3840 },
@@ -975,18 +996,72 @@
           },
           audio: false,
         });
-        video.srcObject = stream;
-        videoTrack = stream.getVideoTracks()[0];
-        const caps = videoTrack.getCapabilities?.() || {};
-        if (caps.zoom) {
-          zoomCaps    = caps.zoom;
-          currentZoom = caps.zoom.min || 1;
-        }
+        currentLens  = 'main';
+        mainDeviceId = videoTrack.getSettings?.().deviceId || null;
+        detectUltraWide();
       } catch {
         video.style.display = 'none';
         camError.classList.add('show');
         captureBtn.disabled      = true;
         captureBtn.style.opacity = '0.35';
+      }
+    }
+
+    // Find an ultra-wide back camera by label. Labels are only populated after
+    // camera permission is granted, so this runs after startCamera() succeeds.
+    // iOS exposes "Back Ultra Wide Camera"; some Android labels include "ultra"
+    // or "0.5". If none is found, ultraWideDeviceId stays null and zoom-out
+    // simply stops at 1× (no fake zoom).
+    async function detectUltraWide() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cams = devices.filter(d => d.kind === 'videoinput');
+        const backCams = cams.filter(d => /back|rear|environment/i.test(d.label));
+        const pool = backCams.length ? backCams : cams;
+        const uw = pool.find(d =>
+          d.deviceId !== mainDeviceId && /ultra[\s-]?wide|ultrawide|\b0\.5\b/i.test(d.label)
+        );
+        ultraWideDeviceId = uw ? uw.deviceId : null;
+      } catch {
+        ultraWideDeviceId = null;
+      }
+    }
+
+    async function switchToUltraWide() {
+      if (!ultraWideDeviceId || switchingLens || currentLens === 'ultrawide') return;
+      switchingLens = true;
+      try {
+        await openStream({
+          video: { deviceId: { exact: ultraWideDeviceId },
+                   width: { ideal: 3840 }, height: { ideal: 2160 } },
+          audio: false,
+        });
+        currentLens = 'ultrawide';
+        if (zoomCaps) applyHardwareZoom(zoomCaps.min);  // keep ultra-wide at its widest
+        showZoom(0.5, true);
+      } catch {
+        await switchToMain();
+      } finally {
+        switchingLens = false;
+      }
+    }
+
+    async function switchToMain() {
+      if (switchingLens || currentLens === 'main') return;
+      switchingLens = true;
+      try {
+        const constraints = mainDeviceId
+          ? { video: { deviceId: { exact: mainDeviceId },
+                       width: { ideal: 3840 }, height: { ideal: 2160 } }, audio: false }
+          : { video: { facingMode: { ideal: 'environment' },
+                       width: { ideal: 3840 }, height: { ideal: 2160 } }, audio: false };
+        await openStream(constraints);
+        currentLens = 'main';
+        showZoom(currentZoom, !zoomCaps || currentZoom <= zoomCaps.min);
+      } catch {
+        /* keep whatever stream we have */
+      } finally {
+        switchingLens = false;
       }
     }
 
@@ -1000,9 +1075,6 @@
       return Math.sqrt(dx * dx + dy * dy);
     }
 
-    let digitalZoom = 1;
-    const DIGITAL_ZOOM_MIN = 0.3;
-
     function showZoom(zoom, atMin) {
       zoomIndicator.textContent = zoom.toFixed(1) + '×' + (atMin ? ' (min)' : '');
       zoomIndicator.style.opacity = '1';
@@ -1010,28 +1082,11 @@
       zoomHideTimer = setTimeout(() => zoomIndicator.style.opacity = '0', 1500);
     }
 
-    function applyZoom(newZoom) {
-      if (!videoTrack) return;
-
-      if (zoomCaps && newZoom >= zoomCaps.min) {
-        // Hardware zoom range — clear any digital zoom-out
-        digitalZoom = 1;
-        video.style.transform = '';
-        currentZoom = Math.min(zoomCaps.max, newZoom);
-        videoTrack.applyConstraints({ advanced: [{ zoom: currentZoom }] }).catch(() => {});
-        showZoom(currentZoom, false);
-      } else {
-        // Digital zoom-out below hardware min — shrink video via CSS transform
-        const hwMin = zoomCaps ? zoomCaps.min : 1;
-        if (zoomCaps) {
-          videoTrack.applyConstraints({ advanced: [{ zoom: hwMin }] }).catch(() => {});
-        }
-        digitalZoom = Math.max(DIGITAL_ZOOM_MIN, newZoom / hwMin);
-        currentZoom = hwMin;
-        video.style.transform = `scale(${digitalZoom})`;
-        const effectiveZoom = hwMin * digitalZoom;
-        showZoom(effectiveZoom, newZoom / hwMin <= DIGITAL_ZOOM_MIN);
-      }
+    // Apply hardware (optical/sensor) zoom on the current lens, clamped to caps.
+    function applyHardwareZoom(newZoom) {
+      if (!zoomCaps || !videoTrack) return;
+      currentZoom = Math.min(zoomCaps.max, Math.max(zoomCaps.min, newZoom));
+      videoTrack.applyConstraints({ advanced: [{ zoom: currentZoom }] }).catch(() => {});
     }
 
     cameraWrap.addEventListener('touchstart', e => {
@@ -1043,10 +1098,25 @@
       const dist  = getPinchDist(e.touches);
       const delta = dist / lastPinchDist;
       lastPinchDist = dist;
+      if (switchingLens || !videoTrack) return;
 
-      if (videoTrack) {
-        const effectiveZoom = currentZoom * digitalZoom;
-        applyZoom(effectiveZoom * delta);
+      if (currentLens === 'ultrawide') {
+        // On the ultra-wide lens any pinch-in returns to the main lens (1×).
+        if (delta > 1.02) switchToMain();
+        return;
+      }
+
+      // Main lens.
+      const atMin = !zoomCaps || currentZoom <= zoomCaps.min + 1e-3;
+      if (atMin && delta < 0.98 && ultraWideDeviceId) {
+        // Already at the widest the main lens allows and still pinching out →
+        // switch to the ultra-wide lens for a wider view.
+        switchToUltraWide();
+        return;
+      }
+      if (zoomCaps) {
+        applyHardwareZoom(currentZoom * delta);
+        showZoom(currentZoom, currentZoom <= zoomCaps.min);
       }
     }, { passive: true });
 
@@ -1062,28 +1132,22 @@
       const vw  = video.videoWidth  || cw;
       const vh  = video.videoHeight || ch;
 
-      if (digitalZoom < 1) {
-        // Digital zoom-out: capture the full sensor frame
-        snapshot.width  = vw;
-        snapshot.height = vh;
-        snapshot.getContext('2d').drawImage(video, 0, 0, vw, vh);
-      } else {
-        // Normal / hardware-zoomed: object-fit:cover crops some pixels.
-        // Capture only the visible region.
-        const scale = Math.max(cw / vw, ch / vh);
-        const visW  = cw / scale;
-        const visH  = ch / scale;
-        const sx    = (vw - visW) / 2;
-        const sy    = (vh - visH) / 2;
+      // Video is shown with object-fit:cover, which crops some sensor pixels to
+      // fill the viewfinder. Capture exactly the visible region so the snapshot
+      // matches what the user framed on screen.
+      const scale = Math.max(cw / vw, ch / vh);
+      const visW  = cw / scale;
+      const visH  = ch / scale;
+      const sx    = (vw - visW) / 2;
+      const sy    = (vh - visH) / 2;
 
-        snapshot.width  = Math.round(cw * dpr);
-        snapshot.height = Math.round(ch * dpr);
-        snapshot.getContext('2d').drawImage(
-          video,
-          sx, sy, visW, visH,
-          0, 0, snapshot.width, snapshot.height
-        );
-      }
+      snapshot.width  = Math.round(cw * dpr);
+      snapshot.height = Math.round(ch * dpr);
+      snapshot.getContext('2d').drawImage(
+        video,
+        sx, sy, visW, visH,
+        0, 0, snapshot.width, snapshot.height
+      );
 
       // Flash animation
       const flash = document.createElement('div');
@@ -1103,8 +1167,6 @@
       video.style.display      = '';
       captureBtn.style.display = '';
       captureBtn.disabled      = false;
-      digitalZoom = 1;
-      video.style.transform    = '';
       actionBtns.classList.remove('show');
       analyzeBtn.disabled      = true;
       analyzeBtn.textContent   = 'Analyze';
@@ -2945,7 +3007,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
           <h3>How ShelfCheck works</h3>
           <div class="first-hint-row">
             <span class="first-hint-dot" style="background:#3b82f6"></span>
-            <span>Point at a shelf and tap the shutter. Pinch to zoom in or out.</span>
+            <span>Point at a shelf and tap the shutter. Pinch in for detail, or out for a wider view.</span>
           </div>
           <div class="first-hint-row">
             <span class="first-hint-dot" style="background:#ef4444"></span>
