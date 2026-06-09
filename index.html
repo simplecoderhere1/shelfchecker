@@ -744,36 +744,127 @@
       return document.querySelector('.tab-btn.active').dataset.section;
     }
 
-    // Compact prompt + array format. Output tokens are the dominant latency cost.
     function buildPrompt(section) {
-      const sec =
-        section === 'nonfiction' ? 'This is a NONFICTION shelf (books sort by Dewey/call number — put it in index 2).'
-        : 'This is a FICTION shelf (books sort by author surname).';
+      if (section === 'nonfiction') {
+        return `This is a library NONFICTION shelf photo.
+Return ONLY a JSON array of arrays, one per book spine, left-to-right.
+Each inner array has exactly 3 elements:
+0: full text on the white sticker at the bottom of the spine (e.g. "973.7 HAR", "KIN"), or null if unreadable.
+1: book title from the spine, or null if unreadable.
+2: 1 if you read both clearly, 0 if unsure.
+Rules: the white bottom sticker is the primary sort key — read it first. Return null and 0 if you cannot read it. Never copy a neighbor's text.
+Example: [["973.7 HAR","Lincoln",1],["KIN","The Stand",1]]`;
+      }
 
-      return `Read every book spine in this library shelf photo, left-to-right and top-to-bottom.
-Return ONLY a JSON array of arrays. Each inner array represents one spine with these 6 elements in exact order:
-0: author SURNAME only (uppercase), or null. The white sticker at the bottom of the spine is the most reliable source.
-1: book TITLE only (NOT the author), or null.
-2: full text on the white bottom sticker, e.g. "KIN", "973.7 HAR", "BLACK, Cara 5", or null.
-3: series volume number as an integer if shown, else null.
-4: 1 if you read the spine clearly, 0 if unsure.
-5: tight bounding box [ymin,xmin,ymax,xmax], normalized 0-1000, hugging that ONE spine only (never spanning neighbors or shelves).
-${sec}
-Rules: read the bottom sticker first. NEVER copy a neighbor's text — use null and 0 for element 4 if unsure (a wrong guess hides shelving errors).
-Example: [["BLACK","Murder in Clichy","BLACK, Cara 5",5,1,[80,50,920,140]]]`;
+      return `This is a library FICTION shelf photo.
+Return ONLY a JSON array of arrays, one per book spine, left-to-right.
+Each inner array has exactly 3 elements:
+0: full text on the white sticker at the bottom of the spine (e.g. "BLACK, Cara", "BLACK, Cara 5"), or null if unreadable.
+1: book title from the spine, or null if unreadable.
+2: 1 if you read both clearly, 0 if unsure.
+Rules: the white bottom sticker is the primary sort key — read it first. Return null and 0 if you cannot read it. Never copy a neighbor's text.
+Example: [["BLACK, Cara","Murder in Clichy",1],["KING, Stephen","The Stand",1]]`;
     }
 
-    // Expand the terse wire format back into the field names the sorting logic expects.
+    // Expand the 3-element wire format [spine_label, title, confidence] into
+    // the field names the sorting logic expects. bounding_box is filled in later
+    // by the canvas detector, not by Gemini.
     function expandBook(arr) {
       return {
-        author_last:   arr[0] ?? null,
+        author_last:   null,
         title:         arr[1] ?? null,
-        spine_label:   arr[2] ?? null,
-        call_number:   null,                                    // Dewey rides in spine_label
-        series_volume: typeof arr[3] === 'number' ? arr[3] : null,
-        confidence:    arr[4] === 1 ? 'high' : 'low',
-        bounding_box:  Array.isArray(arr[5]) && arr[5].length === 4 ? arr[5] : null,
+        spine_label:   arr[0] ?? null,
+        call_number:   null,
+        series_volume: null,
+        confidence:    arr[2] === 1 ? 'high' : 'low',
+        bounding_box:  null,
       };
+    }
+
+    // Detect white spine-label stickers using Canvas pixel data.
+    // Scans the bottom 35% of the image for bright, low-saturation (white) regions,
+    // groups them into per-book label blobs, and returns boxes normalized 0-1000.
+    function detectLabelBoxes() {
+      const W = snapshot.width;
+      const H = snapshot.height;
+
+      // Downscale for speed — 500px wide is plenty for color thresholding
+      const scale = Math.min(1, 500 / W);
+      const sw = Math.round(W * scale);
+      const sh = Math.round(H * scale);
+
+      const tmp = document.createElement('canvas');
+      tmp.width = sw; tmp.height = sh;
+      tmp.getContext('2d').drawImage(snapshot, 0, 0, sw, sh);
+      const data = tmp.getContext('2d').getImageData(0, 0, sw, sh).data;
+
+      // Labels sit in the bottom third of the photo
+      const scanTop = Math.floor(sh * 0.65);
+      const scanHeight = sh - scanTop;
+
+      // Count white-ish pixels per column
+      const colWhite = new Uint16Array(sw);
+      for (let y = scanTop; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+          const i = (y * sw + x) * 4;
+          const r = data[i], g = data[i + 1], b = data[i + 2];
+          const bright  = r > 195 && g > 195 && b > 195;
+          const neutral = Math.max(r, g, b) - Math.min(r, g, b) < 55;
+          if (bright && neutral) colWhite[x]++;
+        }
+      }
+
+      // A column is a "label column" if ≥20% of scanned rows are white
+      const threshold = scanHeight * 0.20;
+      const isLabel = Array.from(colWhite, c => c >= threshold);
+
+      // Find contiguous label column runs
+      const runs = [];
+      let inRun = false, runStart = 0;
+      for (let x = 0; x < sw; x++) {
+        if (isLabel[x] && !inRun) { inRun = true; runStart = x; }
+        else if (!isLabel[x] && inRun) { inRun = false; runs.push([runStart, x - 1]); }
+      }
+      if (inRun) runs.push([runStart, sw - 1]);
+
+      // Merge runs with small gaps (≤6px at scaled width)
+      const merged = [];
+      for (const [x0, x1] of runs) {
+        if (merged.length && x0 - merged[merged.length - 1][1] <= 6) {
+          merged[merged.length - 1][1] = x1;
+        } else {
+          merged.push([x0, x1]);
+        }
+      }
+
+      // Filter: too narrow (noise) or too wide (whole book cover, not a label)
+      const minW = sw * 0.015;
+      const maxW = sw * 0.22;
+      const valid = merged.filter(([x0, x1]) => {
+        const w = x1 - x0;
+        return w >= minW && w <= maxW;
+      });
+
+      // For each region find the exact y-extent of white pixels, then normalize
+      return valid.map(([x0, x1]) => {
+        let yMin = sh, yMax = scanTop;
+        for (let y = scanTop; y < sh; y++) {
+          for (let x = x0; x <= x1; x++) {
+            const i = (y * sw + x) * 4;
+            const r = data[i], g = data[i + 1], b = data[i + 2];
+            if (r > 195 && g > 195 && b > 195 && Math.max(r, g, b) - Math.min(r, g, b) < 55) {
+              if (y < yMin) yMin = y;
+              if (y > yMax) yMax = y;
+            }
+          }
+        }
+        return [
+          Math.round((yMin / sh) * 1000),
+          Math.round((x0  / sw) * 1000),
+          Math.round((yMax / sh) * 1000),
+          Math.round((x1  / sw) * 1000),
+        ];
+      });
     }
 
     // Downscale via step-halving to avoid bilinear smearing on large reductions.
@@ -874,8 +965,7 @@ Example: [["BLACK","Murder in Clichy","BLACK, Cara 5",5,1,[80,50,920,140]]]`;
       const json  = await res.json();
       const raw   = json.candidates[0].content.parts[0].text;
       return JSON.parse(raw.replace(/```json|```/g, '').trim())
-        .map(expandBook)
-        .map(reconcileAuthorFields);
+        .map(expandBook);
     }
 
     async function analyzeShelf() {
@@ -892,8 +982,17 @@ Example: [["BLACK","Murder in Clichy","BLACK, Cara 5",5,1,[80,50,920,140]]]`;
 
       try {
         const tApi0 = performance.now();
-        const books = await callGemini(prompt, image);
+        const [books, boxes] = await Promise.all([
+          callGemini(prompt, image),
+          Promise.resolve(detectLabelBoxes()),
+        ]);
         const apiTime = Math.round(performance.now() - tApi0);
+
+        // Merge canvas boxes into books by left-to-right index
+        if (boxes.length === books.length) {
+          books.forEach((b, i) => { b.bounding_box = boxes[i]; });
+        }
+
         success = true;
         showResults(books, section);
         if (debugMode) showTimingBadge(procTime, apiTime, GEMINI_MODEL);
