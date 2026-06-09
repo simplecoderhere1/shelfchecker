@@ -220,6 +220,29 @@
     .badge-warn         { background: #450a0a; color: #f87171; }
     .badge-unverifiable { background: #713f12; color: #fde047; }
 
+    /* Highlight boxes drawn over flagged book spines */
+    .book-boxes {
+      position: absolute;
+      inset: 0;
+      z-index: 19;
+      pointer-events: none;   /* taps fall through to the snapshot for inspect */
+    }
+    .book-box {
+      position: absolute;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    .book-box-bad {
+      border: 3px solid #ef4444;
+      background: rgba(239, 68, 68, 0.18);
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.4), 0 0 12px rgba(239,68,68,0.5);
+    }
+    .book-box-unv {
+      border: 3px solid #facc15;
+      background: rgba(250, 204, 21, 0.14);
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
+    }
+
     /* Inline error banner */
     .error-banner {
       position: absolute;
@@ -314,268 +337,6 @@
       color: #fff;
     }
 
-    /* ── Step-through UI ────────────────────────────────── */
-    .step-arrow {
-      position: absolute;
-      z-index: 22;
-      pointer-events: none;
-      transform: translate(-50%, -100%);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      transition: left 0.28s ease, top 0.28s ease;
-      filter: drop-shadow(0 3px 8px rgba(0,0,0,0.5));
-    }
-    .step-arrow-num {
-      background: #ef4444;
-      color: #fff;
-      font-weight: 800;
-      font-size: 17px;
-      padding: 6px 14px;
-      border-radius: 18px;
-      min-width: 28px;
-      text-align: center;
-      letter-spacing: 0.02em;
-    }
-    .step-arrow-tip {
-      width: 0;
-      height: 0;
-      border-left: 11px solid transparent;
-      border-right: 11px solid transparent;
-      border-top: 16px solid #ef4444;
-      margin-top: -1px;
-    }
-    .step-arrow.step-arrow-unv .step-arrow-num {
-      background: #facc15;
-      color: #1a1a1a;
-    }
-    .step-arrow.step-arrow-unv .step-arrow-tip {
-      border-top-color: #facc15;
-    }
-
-    /* Persistent yellow "?" markers for unverifiable books — always visible */
-    .unv-markers-wrap {
-      position: absolute;
-      inset: 0;
-      z-index: 21;
-      pointer-events: none;
-    }
-    .unv-marker {
-      position: absolute;
-      transform: translate(-50%, -100%);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      filter: drop-shadow(0 2px 5px rgba(0,0,0,0.45));
-    }
-    .unv-marker-pill {
-      background: #facc15;
-      color: #1a1a1a;
-      font-weight: 800;
-      font-size: 13px;
-      padding: 4px 9px;
-      border-radius: 12px;
-      line-height: 1.1;
-    }
-    .unv-marker-tip {
-      width: 0;
-      height: 0;
-      border-left: 7px solid transparent;
-      border-right: 7px solid transparent;
-      border-top: 10px solid #facc15;
-      margin-top: -1px;
-    }
-
-    /* Destination arrow — green, shown below source arrow when "place before X" */
-    .step-arrow-dest {
-      position: absolute;
-      z-index: 22;
-      pointer-events: none;
-      transform: translate(-50%, -100%);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      transition: left 0.28s ease, top 0.28s ease;
-      filter: drop-shadow(0 3px 8px rgba(0,0,0,0.5));
-    }
-    .step-arrow-dest-pill {
-      background: #16a34a;
-      color: #fff;
-      font-weight: 700;
-      font-size: 13px;
-      padding: 5px 12px;
-      border-radius: 18px;
-      text-align: center;
-      letter-spacing: 0.04em;
-      white-space: nowrap;
-    }
-    .step-arrow-dest-tip {
-      width: 0;
-      height: 0;
-      border-left: 9px solid transparent;
-      border-right: 9px solid transparent;
-      border-top: 13px solid #16a34a;
-      margin-top: -1px;
-    }
-
-    .step-card {
-      position: relative;   /* in normal flow — stacks below photo area */
-      flex-shrink: 0;
-      z-index: 22;
-      background: rgba(20, 20, 20, 0.97);
-      backdrop-filter: blur(8px);
-      border-top: 1px solid #2c2c2c;
-      padding: 14px 16px;
-      padding-bottom: max(14px, env(safe-area-inset-bottom));
-      color: #eee;
-    }
-    .step-card-top {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 11.5px;
-      letter-spacing: 0.07em;
-      text-transform: uppercase;
-      color: #888;
-    }
-    .step-summary { color: #f87171; }
-    .step-counter { color: #888; font-variant-numeric: tabular-nums; font-size: 12px; align-self: center; }
-    .step-list-btn {
-      background: #2c2c2c;
-      border: 1px solid #333;
-      color: #ddd;
-      font-size: 12px;
-      font-weight: 600;
-      padding: 4px 10px;
-      border-radius: 8px;
-      cursor: pointer;
-    }
-    .step-list-btn:active { transform: scale(0.96); }
-    .step-newscan-full {
-      width: 100%;
-      margin-top: 8px;
-    }
-    .step-title {
-      font-size: 17px;
-      font-weight: 700;
-      margin-top: 4px;
-      color: #fff;
-      line-height: 1.25;
-    }
-    .step-meta {
-      font-size: 13px;
-      color: #aaa;
-      margin-top: 2px;
-    }
-    .step-action {
-      margin-top: 10px;
-      padding: 11px 12px;
-      background: #1e3a8a;
-      color: #dbeafe;
-      border-radius: 8px;
-      font-size: 13.5px;
-      line-height: 1.4;
-      text-align: center;
-    }
-    .step-action b { color: #fff; }
-    .step-nav {
-      display: flex;
-      gap: 8px;
-      margin-top: 12px;
-    }
-    .step-btn {
-      flex: 1;
-      padding: 11px 0;
-      border-radius: 10px;
-      font-size: 14px;
-      font-weight: 600;
-      border: 1px solid #333;
-      background: #2c2c2c;
-      color: #ddd;
-      cursor: pointer;
-      transition: transform 0.1s ease;
-    }
-    .step-btn:active { transform: scale(0.97); }
-    .step-btn-primary {
-      background: #2563eb;
-      border-color: #2563eb;
-      color: #fff;
-    }
-
-    /* Moves list view — flat list of all misplaced books */
-    .moves-list {
-      position: absolute;
-      inset: 0;
-      z-index: 28;
-      background: #0d0d0d;
-      display: flex;
-      flex-direction: column;
-    }
-    .moves-list-head {
-      flex-shrink: 0;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 14px 16px;
-      padding-top: max(14px, env(safe-area-inset-top));
-      border-bottom: 1px solid #2c2c2c;
-      font-size: 14px;
-      font-weight: 600;
-      color: #f87171;
-    }
-    .moves-close {
-      background: #2563eb;
-      border: none;
-      color: #fff;
-      font-size: 13px;
-      font-weight: 600;
-      padding: 7px 16px;
-      border-radius: 8px;
-      cursor: pointer;
-    }
-    .moves-scroll {
-      flex: 1;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-    }
-    .moves-item {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      width: 100%;
-      text-align: left;
-      padding: 12px 16px;
-      background: transparent;
-      border: none;
-      border-bottom: 1px solid #1c1c1c;
-      cursor: pointer;
-      color: #eee;
-    }
-    .moves-item:active { background: #1c1c1c; }
-    .moves-pos {
-      flex-shrink: 0;
-      width: 30px; height: 30px;
-      border-radius: 50%;
-      background: #ef4444;
-      color: #fff;
-      font-size: 13px;
-      font-weight: 800;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .moves-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-    .moves-title {
-      font-size: 14px;
-      font-weight: 600;
-      color: #fff;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .moves-action { font-size: 12.5px; color: #aaa; }
-    .moves-action b { color: #93c5fd; }
-
     /* Tap-to-inspect popup */
     .book-inspect {
       position: absolute;
@@ -624,17 +385,6 @@
       color: #cbd5e1;
       text-align: center;
     }
-    .bi-move {
-      margin-top: 8px;
-      padding: 10px 12px;
-      background: #1e3a8a;
-      border-radius: 8px;
-      color: #dbeafe;
-      font-size: 12.5px;
-      line-height: 1.45;
-      text-align: center;
-    }
-    .bi-move b { color: #fff; }
     .bi-close {
       position: absolute;
       top: 6px;
@@ -936,16 +686,6 @@
       }
       .action-btns { flex-direction: column; }
       .btn { padding: 10px 16px; font-size: 13px; }
-
-      /* Step card: shrink it in landscape so it doesn't eat too much height */
-      .step-card {
-        padding: 10px 14px;
-        padding-bottom: max(10px, env(safe-area-inset-bottom));
-      }
-      .step-title { font-size: 15px; }
-      .step-action { font-size: 12px; padding: 8px 10px; margin-top: 7px; }
-      .step-nav { margin-top: 8px; }
-      .step-btn { padding: 9px 0; font-size: 13px; }
     }
   </style>
 </head>
@@ -1166,56 +906,45 @@
     // ── Gemini API ────────────────────────────────────────
     const GEMINI_URL = 'https://selfcheck-proxy.krish-sundareswar.workers.dev/';
 
-    const GEMINI_MODEL = 'gemini-2.0-flash';
+    const GEMINI_MODEL = 'gemini-3.5-flash';
 
     function getSection() {
       return document.querySelector('.tab-btn.active').dataset.section;
     }
 
+    // Compact prompt + short JSON keys. Output tokens are the dominant latency cost
+    // for a 30-50 book shelf, so the schema is deliberately terse:
+    //   a=author surname, t=title, l=sticker label, v=volume int, c=confidence(0/1), b=box
     function buildPrompt(section) {
-      const sectionInstruction =
-        section === 'auto'
-          ? 'Section type: AUTO. Detect for each book whether it is fiction (sort key = author last name) or nonfiction (sort key = Dewey/call number). Read every field you can.'
-          : `Section type: ${section.toUpperCase()}`;
+      const sec =
+        section === 'nonfiction' ? 'This is a NONFICTION shelf (books sort by Dewey/call number — put it in "l").'
+        : section === 'fiction'  ? 'This is a FICTION shelf (books sort by author surname).'
+        : 'Each book is fiction (sorts by author surname) or nonfiction (sorts by Dewey number — put it in "l").';
 
-      return `You are reading a library bookshelf photo. Identify every individual book spine visible, ordered left to right (and top to bottom across multiple shelves).
+      return `Read every book spine in this library shelf photo, left-to-right and top-to-bottom.
+Return ONLY a JSON array. Each spine = one object with these short keys:
+"a": author SURNAME only (uppercase), or null. The white sticker at the bottom of the spine is the most reliable source.
+"t": book TITLE only (NOT the author), or null.
+"l": full text on the white bottom sticker, e.g. "KIN", "973.7 HAR", "BLACK, Cara 5", or null.
+"v": series volume number as an integer if shown, else null.
+"c": 1 if you read the spine clearly, 0 if unsure.
+"b": tight bounding box [ymin,xmin,ymax,xmax], normalized 0-1000, hugging that ONE spine only (never spanning neighbors or shelves).
+${sec}
+Rules: read the bottom sticker first. NEVER copy a neighbor's text — use null and c:0 if unsure (a wrong guess hides shelving errors). "t" and "a" must differ.
+Example: [{"a":"BLACK","t":"Murder in Clichy","l":"BLACK, Cara 5","v":5,"c":1,"b":[80,50,920,140]}]`;
+    }
 
-For each spine, return:
-- position: 1-indexed reading order
-- title: the BOOK TITLE only, as printed on the spine, or null if unreadable. This is the name of the book — NOT the author's name. Many spines show the author name in large text and the title in smaller text; read both carefully and assign each to the correct field.
-- author_last: the author's LAST NAME (surname) only, or null. This is the person who wrote the book. Do NOT put the book title here. If the author has a multi-word surname (e.g. "De La Cruz", "Van Dyke", "St. James"), include the FULL surname with all parts.
-- call_number: Dewey number (for nonfiction), or null
-- spine_label: the FULL text printed on the white library sticker at the BOTTOM of the spine. Include the cutter/author code AND the series name and volume number if visible. Examples: "KIN", "973.7 HAR", "BLACK, Cara, Leduc 5", "PATTERSON, Maximum Ride 3". If no sticker is visible, return null.
-- series_volume: if the spine or label shows a numbered series volume (e.g. "Leduc 5", "Book 3", "Vol. 7", "#2"), return the volume as an INTEGER. Otherwise null. In a series, libraries sort by volume number, NOT by title.
-- confidence: "high" | "medium" | "low" based on how clearly you can read the spine
-- bounding_box: [ymin, xmin, ymax, xmax] in normalized 0-1000 coordinates (0,0 = top-left)
-
-READING TIPS for accuracy:
-- DISTINGUISH title from author: The TITLE is the name of the book (e.g. "Murder in Clichy", "Maximum Ride"). The AUTHOR is the person who wrote it (e.g. "Black", "Patterson"). Many spines print the author name larger than the title — do not confuse them. The library sticker almost always has the author surname; use it to verify author_last.
-- Start with the white library sticker at the BOTTOM of each spine — it is pre-printed and is the most reliable text. Read it line by line: top line is usually SURNAME in all caps, second line is first name, third line (if present) is series name, fourth line is volume number.
-- If a spine is genuinely hard to read, return null for the unclear field — do NOT copy the author or title from a neighboring spine. The whole purpose is to find shelving mistakes, so assuming a book matches its neighbors hides the very errors we are looking for. An honest null (shown to the user as "unverifiable") is always better than a borrowed guess.
-- Spine text is often rotated 90 degrees. Read carefully — do not confuse letters like "d/p", "b/q", "m/w" that look alike when rotated.
-- COMMON OCR TRAPS: "rn" looks like "m", "cl" looks like "d", "I" vs "l" vs "1", "O" vs "0". When in doubt, cross-check with the sticker text.
-- Return null for any field you cannot read clearly. Do NOT guess — a wrong value is worse than null.
-
-CRITICAL bounding box rules:
-- Each box must hug ONLY ONE spine — tight to its left, right, top, and bottom edges
-- Do NOT include the shelf, the gap between books, or adjacent spines
-- Spines are vertical: boxes should be tall and narrow
-- For a spine that runs the full height of a shelf, ymin = top of shelf, ymax = bottom of shelf
-- xmin and xmax should hug ONLY the spine's own width — not its neighbor
-- A box must NEVER cross from one shelf into another. If a spine is on the TOP shelf, its ymax must stop at the visible shelf surface below it — do NOT continue into the next shelf.
-- Before returning each box, verify: "does this rectangle contain exactly one spine and nothing else?"
-
-SELF-CHECK before returning:
-1. Count the physical spines you can see in the image. Does your array length match?
-2. For any entry with confidence "low", re-examine that spine one more time — can you improve the reading?
-3. Verify that author_last and spine_label are consistent: the surname in the label should match author_last. If they disagree, trust the STICKER.
-4. Verify title ≠ author_last: the title field and the author_last field should NOT contain the same text. If they do, one is wrong.
-
-${sectionInstruction}
-Return ONLY valid JSON. Use null for unreadable fields — never guess.
-Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_number":null,"spine_label":"BLACK, Cara, Leduc 5","series_volume":5,"confidence":"high","bounding_box":[80,50,920,140]}]`;
+    // Expand the terse wire format back into the field names the sorting logic expects.
+    function expandBook(o) {
+      return {
+        author_last:   o.a ?? null,
+        title:         o.t ?? null,
+        spine_label:   o.l ?? null,
+        call_number:   null,                                    // Dewey rides in spine_label
+        series_volume: typeof o.v === 'number' ? o.v : null,
+        confidence:    o.c === 1 ? 'high' : 'low',
+        bounding_box:  Array.isArray(o.b) && o.b.length === 4 ? o.b : null,
+      };
     }
 
     // Downscale via step-halving to avoid bilinear smearing on large reductions.
@@ -1340,7 +1069,9 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
 
       const json  = await res.json();
       const raw   = json.candidates[0].content.parts[0].text;
-      return JSON.parse(raw.replace(/```json|```/g, '').trim()).map(reconcileAuthorFields);
+      return JSON.parse(raw.replace(/```json|```/g, '').trim())
+        .map(expandBook)
+        .map(reconcileAuthorFields);
     }
 
     async function analyzeShelf() {
@@ -1954,65 +1685,56 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       return [...checkedShelves, ...checkedUngrouped];
     }
 
-    // ── Shared helper: map a bounding box to pixel coords over cameraWrap ──
-    // Used by both renderStep arrows and renderUnverifiableMarkers.
-    function bbToDisplay(bb) {
+    // Map a normalized (0-1000) bounding box to a pixel rect over photoArea,
+    // accounting for the snapshot's object-fit:contain letterboxing.
+    function bbToRect(bb) {
       const cw = snapshot.width, ch = snapshot.height;
-      const rect = snapshot.getBoundingClientRect();
-      const wrapRect = cameraWrap.getBoundingClientRect();
-      const dispScale = Math.min(rect.width / cw, rect.height / ch);
-      const dispW = cw * dispScale, dispH = ch * dispScale;
-      const offX = (rect.width  - dispW) / 2 + (rect.left - wrapRect.left);
-      const offY = (rect.height - dispH) / 2 + (rect.top  - wrapRect.top);
-      const [ymin, xmin, , xmax] = bb;
-      const cx = ((xmin + xmax) / 2 / 1000) * cw;
-      const ty = (ymin / 1000) * ch;
+      const rect   = snapshot.getBoundingClientRect();
+      const paRect = photoArea.getBoundingClientRect();
+      const s = Math.min(rect.width / cw, rect.height / ch);
+      const offX = (rect.width  - cw * s) / 2 + (rect.left - paRect.left);
+      const offY = (rect.height - ch * s) / 2 + (rect.top  - paRect.top);
+      const [ymin, xmin, ymax, xmax] = bb;
       return {
-        left: offX + cx * dispScale,
-        top:  Math.max(8, offY + ty * dispScale - 4),
+        left:   offX + (xmin / 1000) * cw * s,
+        top:    offY + (ymin / 1000) * ch * s,
+        width:  ((xmax - xmin) / 1000) * cw * s,
+        height: ((ymax - ymin) / 1000) * ch * s,
       };
     }
 
-    // ── Persistent yellow "?" markers for unverifiable books ──
-    function renderUnverifiableMarkers() {
-      document.getElementById('unvMarkers')?.remove();
-      const unvBooks = lastCheckedBooks.filter(b => b.unverifiable && b.bounding_box);
-      if (unvBooks.length === 0) return;
+    // Draw a box over each flagged book: red = out of order, yellow = couldn't read.
+    // In-order books are left unmarked so the problems stand out.
+    function renderBoxes() {
+      document.getElementById('bookBoxes')?.remove();
+      const flagged = lastCheckedBooks.filter(b => b.bounding_box && (b.outOfOrder || b.unverifiable));
+      if (flagged.length === 0) return;
 
       const wrap = document.createElement('div');
-      wrap.id = 'unvMarkers';
-      wrap.className = 'unv-markers-wrap';
-      cameraWrap.appendChild(wrap);
+      wrap.id = 'bookBoxes';
+      wrap.className = 'book-boxes';
+      photoArea.appendChild(wrap);
 
-      for (const book of unvBooks) {
-        const pos = bbToDisplay(book.bounding_box);
-        const marker = document.createElement('div');
-        marker.className = 'unv-marker';
-        marker.style.left = `${pos.left}px`;
-        marker.style.top  = `${pos.top}px`;
-        marker.innerHTML = `<div class="unv-marker-pill">?</div><div class="unv-marker-tip"></div>`;
-        wrap.appendChild(marker);
+      for (const b of flagged) {
+        const r = bbToRect(b.bounding_box);
+        const box = document.createElement('div');
+        box.className = 'book-box ' + (b.outOfOrder ? 'book-box-bad' : 'book-box-unv');
+        box.style.left   = `${r.left}px`;
+        box.style.top    = `${r.top}px`;
+        box.style.width  = `${r.width}px`;
+        box.style.height = `${r.height}px`;
+        wrap.appendChild(box);
       }
     }
 
-    // ── Results: step-through mode (one issue at a time) ─────
+    // ── Results: draw boxes + a summary badge ───────────────
     let lastCheckedBooks = [];
-    let stepIssues = [];
-    let stepCursor = 0;
 
     function showResults(books, section) {
       const checked = checkOrder(books, section);
       lastCheckedBooks = checked;
 
-      // Clean up any prior result UI before rendering new state
       document.getElementById('resultsOverlay')?.remove();
-      document.getElementById('stepThrough')?.remove();
-
-      // Step-through only covers out-of-order books. Unverifiable books get
-      // persistent yellow "?" tags rendered on the photo at all times.
-      stepIssues = checked
-        .filter(b => b.bounding_box && b.outOfOrder)
-        .sort((a, b) => (a.shelfPosition ?? 0) - (b.shelfPosition ?? 0));
 
       const total    = checked.length;
       const outCount = checked.filter(b => b.outOfOrder).length;
@@ -2027,16 +1749,8 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       }
 
       enableInspect();
-
-      // Render persistent yellow markers for unverifiable books
-      renderUnverifiableMarkers();
-
-      if (stepIssues.length === 0) {
-        showSimpleBadge(total, outCount, unvCount);
-      } else {
-        stepCursor = 0;
-        showStepThrough(total, outCount, unvCount);
-      }
+      renderBoxes();
+      showSummaryBadge(total, outCount, unvCount);
     }
 
     // Shown when Gemini detected zero books (blurry/dark/empty photo or a misfire).
@@ -2050,11 +1764,12 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       photoArea.appendChild(overlay);
     }
 
-    function showSimpleBadge(total, outCount, unvCount) {
-      const readLabel = `${total} read`;
+    // Bottom summary: red count of out-of-order books, else yellow count to check,
+    // else all-clear green. Tap any box on the photo for that book's details.
+    function showSummaryBadge(total, outCount, unvCount) {
       let badgeClass, badgeText;
-      if (outCount > 0)       { badgeClass = 'badge-warn';         badgeText = `⚠ ${outCount} to move · ${readLabel}`; }
-      else if (unvCount > 0)  { badgeClass = 'badge-unverifiable'; badgeText = `⚠ ${unvCount} unverifiable · ${readLabel}`; }
+      if (outCount > 0)       { badgeClass = 'badge-warn';         badgeText = `${outCount} out of order · ${total} read`; }
+      else if (unvCount > 0)  { badgeClass = 'badge-unverifiable'; badgeText = `${unvCount} to check · ${total} read`; }
       else                    { badgeClass = 'badge-ok';           badgeText = `✓ All ${total} in order`; }
 
       const overlay = document.createElement('div');
@@ -2066,178 +1781,9 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
       photoArea.appendChild(overlay);
     }
 
-    function showStepThrough(total, outCount, unvCount) {
-      const container = document.createElement('div');
-      container.id = 'stepThrough';
-      const parts = [];
-      if (outCount > 0) parts.push(`${outCount} to move`);
-      if (unvCount > 0) parts.push(`${unvCount} unverifiable`);
-      parts.push(`${total} read`);
-      const summary = parts.join(' · ');
-      container.innerHTML = `
-        <div class="step-arrow" id="stepArrow">
-          <div class="step-arrow-num" id="stepArrowNum">1</div>
-          <div class="step-arrow-tip"></div>
-        </div>
-        <div class="step-arrow-dest" id="stepArrowDest" style="display:none">
-          <div class="step-arrow-dest-pill">place here</div>
-          <div class="step-arrow-dest-tip"></div>
-        </div>
-        <div class="step-card" id="stepCard">
-          <div class="step-card-top">
-            <span class="step-summary">${summary}</span>
-            <button class="step-list-btn" id="stepListBtn">☰ List</button>
-          </div>
-          <div class="step-title" id="stepTitle">—</div>
-          <div class="step-meta" id="stepMeta">—</div>
-          <div class="step-action" id="stepAction">—</div>
-          <div class="step-nav">
-            <button class="step-btn" id="stepPrev">← Prev</button>
-            <span class="step-counter" id="stepCounter"></span>
-            <button class="step-btn" id="stepNext">Next →</button>
-          </div>
-          <button class="step-btn step-btn-primary step-newscan-full" id="stepNewScan">New Scan</button>
-        </div>`;
-      cameraWrap.appendChild(container);
-
-      document.getElementById('stepPrev').onclick = () => {
-        stepCursor = (stepCursor - 1 + stepIssues.length) % stepIssues.length;
-        renderStep();
-      };
-      document.getElementById('stepNext').onclick = () => {
-        stepCursor = (stepCursor + 1) % stepIssues.length;
-        renderStep();
-      };
-      document.getElementById('stepNewScan').onclick = newScan;
-      document.getElementById('stepListBtn').onclick = showMovesList;
-
-      renderStep();
-    }
-
-    // Flat list of every misplaced book in shelf order — faster than stepping one-by-one.
-    // Tapping an item jumps the step-through to that book.
-    function showMovesList() {
-      document.getElementById('movesList')?.remove();
-      const overlay = document.createElement('div');
-      overlay.id = 'movesList';
-      overlay.className = 'moves-list';
-
-      let rows = '';
-      stepIssues.forEach((b, idx) => {
-        const dir = (b.idealPosition && b.shelfPosition)
-          ? (b.idealPosition < b.shelfPosition ? 'LEFT' : 'RIGHT')
-          : '';
-        const dest = (b.outOfOrder && b.idealPosition && b.shelfPosition)
-          ? lastCheckedBooks.find(d => d.shelfIndex === b.shelfIndex && d.shelfPosition === b.idealPosition)
-          : null;
-        const destName = dest ? (dest.title || dest.spine_label || (dest.author_last ? `${dest.author_last}'s book` : '')) : '';
-        const action = dir
-          ? `Move <b>${dir}</b>${destName ? ` — before ${escapeHtml(String(destName))}` : ''}`
-          : 'Out of order';
-        rows += `
-          <button class="moves-item" data-idx="${idx}">
-            <span class="moves-pos">${b.shelfPosition ?? '?'}</span>
-            <span class="moves-body">
-              <span class="moves-title">${escapeHtml(b.title) || '(unreadable)'}</span>
-              <span class="moves-action">${action}</span>
-            </span>
-          </button>`;
-      });
-
-      overlay.innerHTML = `
-        <div class="moves-list-head">
-          <span>${stepIssues.length} book${stepIssues.length === 1 ? '' : 's'} to move</span>
-          <button class="moves-close" id="movesClose">Done</button>
-        </div>
-        <div class="moves-scroll">${rows}</div>`;
-      cameraWrap.appendChild(overlay);
-
-      document.getElementById('movesClose').onclick = () => overlay.remove();
-      overlay.querySelectorAll('.moves-item').forEach(item => {
-        item.onclick = () => {
-          stepCursor = parseInt(item.dataset.idx, 10);
-          renderStep();
-          overlay.remove();
-        };
-      });
-    }
-
-    function renderStep() {
-      const book = stepIssues[stepCursor];
-      if (!book) return;
-
-      // Position the source arrow at this book's X-center, just above its top edge.
-      const arrow = document.getElementById('stepArrow');
-      if (arrow && book.bounding_box) {
-        const pos = bbToDisplay(book.bounding_box);
-        arrow.style.left = `${pos.left}px`;
-        arrow.style.top  = `${pos.top}px`;
-        arrow.classList.toggle('step-arrow-warn', !!book.outOfOrder);
-        arrow.classList.toggle('step-arrow-unv',  !!book.unverifiable && !book.outOfOrder);
-      }
-
-      // Find the destination book (the one currently sitting at idealPosition on this shelf).
-      // Used by both the green arrow and the card text below.
-      let dest = null;
-      let destVisible = false;
-      if (book.outOfOrder && book.idealPosition && book.shelfPosition) {
-        dest = lastCheckedBooks.find(
-          b => b.shelfIndex === book.shelfIndex && b.shelfPosition === book.idealPosition
-        );
-        destVisible = !!(dest && dest.bounding_box);
-      }
-
-      // Destination arrow: green, shown when we can point at the target location.
-      const destArrow = document.getElementById('stepArrowDest');
-      if (destArrow) {
-        if (destVisible) {
-          const pos = bbToDisplay(dest.bounding_box);
-          destArrow.style.left = `${pos.left}px`;
-          destArrow.style.top  = `${pos.top}px`;
-          destArrow.style.display = '';
-        } else {
-          destArrow.style.display = 'none';
-        }
-      }
-
-      document.getElementById('stepArrowNum').textContent = String(book.shelfPosition ?? book.position ?? '?');
-      document.getElementById('stepCounter').textContent = `Issue ${stepCursor + 1} of ${stepIssues.length}`;
-      document.getElementById('stepTitle').textContent   = book.title || '(unreadable title)';
-
-      const metaParts = [];
-      if (book.author_last)       metaParts.push(book.author_last);
-      if (book.spine_label)       metaParts.push(book.spine_label);
-      if (book.series_volume != null) metaParts.push(`#${book.series_volume}`);
-      document.getElementById('stepMeta').textContent = metaParts.join(' · ') || '—';
-
-      const actionEl = document.getElementById('stepAction');
-      if (book.unverifiable && !book.outOfOrder) {
-        actionEl.textContent = "Couldn't read this spine clearly — verify visually.";
-        actionEl.style.background = '#713f12';
-        actionEl.style.color      = '#fde047';
-      } else if (book.outOfOrder && book.idealPosition && book.shelfPosition) {
-        const dir = book.idealPosition < book.shelfPosition ? 'LEFT' : 'RIGHT';
-        if (dest) {
-          const destName = dest.title || dest.spine_label
-            || (dest.author_last ? `${dest.author_last}'s book` : `position ${book.idealPosition}`);
-          actionEl.innerHTML = `Move <b>${dir}</b> — place before <b>${escapeHtml(String(destName))}</b>`;
-          actionEl.style.background = '#1e3a8a';
-          actionEl.style.color      = '#dbeafe';
-        } else {
-          // Destination isn't visible in this photo
-          actionEl.innerHTML = `This book is <b>out of order</b> — its correct spot isn't visible in this photo. It should go <b>${dir}</b>, off the edge of the shelf shown.`;
-          actionEl.style.background = '#78350f';
-          actionEl.style.color      = '#fde68a';
-        }
-      } else {
-        actionEl.textContent = '';
-      }
-    }
-
-    // Reposition arrows and markers if the viewport changes (rotation, etc).
+    // Reposition boxes if the viewport changes (rotation, etc).
     window.addEventListener('resize', () => {
-      if (stepIssues.length > 0 && document.getElementById('stepThrough')) renderStep();
-      if (document.getElementById('unvMarkers')) renderUnverifiableMarkers();
+      if (document.getElementById('bookBoxes')) renderBoxes();
     });
 
     // ── Tap-to-inspect: show OCR readout for the tapped book ──
@@ -2285,26 +1831,8 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
 
       const confColor = best.confidence === 'high' ? '#4ade80' : best.confidence === 'medium' ? '#facc15' : '#f87171';
 
-      // Build a "where to move" message for red books.
-      // Find the book currently sitting at the ideal shelf-position so we can name it.
-      let moveText = null;
-      if (best.outOfOrder && best.idealPosition && best.shelfPosition) {
-        const dest = lastCheckedBooks.find(
-          b => b.shelfIndex === best.shelfIndex && b.shelfPosition === best.idealPosition
-        );
-        const direction = best.idealPosition < best.shelfPosition ? 'left' : 'right';
-        if (dest) {
-          const destName = dest.title || dest.spine_label
-            || (dest.author_last && `${dest.author_last}'s book`)
-            || `the book at position ${best.idealPosition}`;
-          moveText = `Move ${direction} — place before <b>${escapeHtml(String(destName))}</b> (currently #${best.idealPosition} on this shelf).`;
-        } else {
-          moveText = `Out of order — correct spot is off the edge of this photo (${direction}).`;
-        }
-      }
-
-      const status = best.unverifiable ? 'Couldn\'t read this spine clearly — not sure if it\'s in order.'
-                   : best.outOfOrder    ? `Out of order — should be at shelf position ${best.idealPosition}.`
+      const status = best.unverifiable ? "⚠ Couldn't read this spine clearly — check it by hand."
+                   : best.outOfOrder    ? '⚠ Out of order — this book is in the wrong spot.'
                    :                       '✓ In order';
 
       const card = document.createElement('div');
@@ -2315,10 +1843,7 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
         <div class="bi-row"><span class="bi-key">Author</span><span class="bi-val">${escapeHtml(best.author_last) || '—'}${best._authorConflict ? ' <span style="color:#facc15;font-size:11px">(label mismatch)</span>' : ''}</span></div>
         <div class="bi-row"><span class="bi-key">Label</span><span class="bi-val">${escapeHtml(best.spine_label || best.call_number) || '—'}</span></div>
         ${best.series_volume != null ? `<div class="bi-row"><span class="bi-key">Volume</span><span class="bi-val">#${best.series_volume}</span></div>` : ''}
-        <div class="bi-row"><span class="bi-key">Confidence</span><span class="bi-val"><span class="bi-dot" style="background:${confColor}"></span>${best.confidence || '—'}</span></div>
-        <div class="bi-row"><span class="bi-key">Position</span><span class="bi-val">${best.shelfPosition ?? '—'} of ${best.shelfSize ?? '—'} on this shelf</span></div>
         <div class="bi-status">${status}</div>
-        ${moveText ? `<div class="bi-move">${moveText}</div>` : ''}
         <button class="bi-close" aria-label="Close">×</button>`;
       photoArea.appendChild(card);
       card.querySelector('.bi-close').addEventListener('click', () => card.remove());
@@ -2331,11 +1856,9 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
 
     function newScan() {
       document.getElementById('resultsOverlay')?.remove();
-      document.getElementById('stepThrough')?.remove();
-      document.getElementById('unvMarkers')?.remove();
+      document.getElementById('bookBoxes')?.remove();
       document.getElementById('debugOverlay')?.remove();
-      document.getElementById('movesList')?.remove();
-      stepIssues = [];
+      document.getElementById('bookInspect')?.remove();
       disableInspect();
       retake();
     }
@@ -2740,15 +2263,15 @@ Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_n
           </div>
           <div class="first-hint-row">
             <span class="first-hint-dot" style="background:#ef4444"></span>
-            <span><b>Red</b> = out of order. The arrow shows where to move it.</span>
+            <span><b>Red box</b> = out of order — move this book.</span>
           </div>
           <div class="first-hint-row">
             <span class="first-hint-dot" style="background:#facc15"></span>
-            <span><b>Yellow ?</b> = couldn't read the spine clearly — check it by eye.</span>
+            <span><b>Yellow box</b> = couldn't read the spine clearly — check it by eye.</span>
           </div>
           <div class="first-hint-row">
             <span class="first-hint-dot" style="background:#4ade80"></span>
-            <span><b>Green</b> = in order. Tap any book to see what was read.</span>
+            <span><b>No box</b> = in order. Tap any book to see what was read.</span>
           </div>
           <button class="first-hint-btn" id="firstHintBtn">Got it</button>
         </div>`;
