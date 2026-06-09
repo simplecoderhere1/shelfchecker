@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>PP-OCR browser test</title></head>
+<body style="font-family:sans-serif;background:#111;color:#eee;padding:20px">
+  <h3>PaddleOCR on onnxruntime-web — test</h3>
+  <pre id="out">status: starting…</pre>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.3/dist/ort.min.js"></script>
+  <script type="module">
+    const out = document.getElementById('out');
+    const log = (m) => { out.textContent += '\n' + m; console.log(m); };
+    window.__status = 'starting';
+    window.__result = null;
+
+    try {
+      log('ort global: ' + (typeof window.ort));
+      log('importing pipeline…');
+      const ppocr = await import('/ppocr.js?v=2');
+      window.__status = 'imported';
+      log('loading models…');
+      const t0 = performance.now();
+      await ppocr.init({
+        detUrl: '/models/det.onnx',
+        recUrl: '/models/rec.onnx',
+        dictUrl: '/models/ppocr_keys_v1.txt',
+        onStatus: (s) => log('  ' + s),
+      });
+      log('models loaded in ' + Math.round(performance.now() - t0) + 'ms');
+
+      log('loading test image…');
+      const img = new Image();
+      img.src = '/ocr_test/test_photos/imagesample.jpg';
+      await img.decode();
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      log('image ' + c.width + 'x' + c.height);
+
+      log('running OCR…');
+      const t1 = performance.now();
+      const res = await ppocr.runOcr(c, (s) => log('  ' + s));
+      log('OCR done in ' + Math.round(performance.now() - t1) + 'ms');
+      window.__result = res;
+      window.__status = 'done';
+      log('--- ' + res.length + ' text regions ---');
+      log(res.map(r => `[${r.score.toFixed(2)}] ${r.text}`).join('\n'));
+    } catch (e) {
+      window.__status = 'error: ' + (e && e.message ? e.message : e);
+      log('ERROR: ' + (e && e.stack ? e.stack : e));
+      console.error(e);
+    }
+  </script>
+</body>
+</html>
