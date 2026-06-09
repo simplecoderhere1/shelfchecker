@@ -1798,8 +1798,25 @@ Example: [["BLACK, Cara","Murder in Clichy",1,[420,10,980,85]],["KING, Stephen",
                 <td>${status}</td>
               </tr>`;
           }
-          tableHtml += '</table></div>';
+          tableHtml += `</table></div>
+            <div style="margin-top:12px">
+              <button id="debugCopyJson" class="btn btn-retake" style="width:100%">Copy raw JSON</button>
+            </div>`;
           resultsDiv.innerHTML = tableHtml;
+
+          document.getElementById('debugCopyJson').onclick = () => {
+            const json = JSON.stringify(books.map(b => ({
+              spine_label: b.spine_label,
+              title: b.title,
+              confidence: b.confidence,
+              bounding_box: b.bounding_box,
+            })), null, 2);
+            navigator.clipboard.writeText(json).then(() => {
+              const btn = document.getElementById('debugCopyJson');
+              btn.textContent = 'Copied!';
+              setTimeout(() => { if (btn) btn.textContent = 'Copy raw JSON'; }, 2000);
+            });
+          };
 
         } catch (err) {
           resultsDiv.innerHTML = `
