@@ -98,10 +98,54 @@
       justify-content: center;
       gap: 14px;
       color: #555;
-      pointer-events: none;
     }
     .photo-placeholder svg { opacity: 0.45; }
     .photo-placeholder p { font-size: 14px; line-height: 1.6; text-align: center; max-width: 220px; }
+
+    #videoFeed {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: none;
+      z-index: 10;
+    }
+    .camera-controls {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 30px;
+      padding-bottom: max(30px, env(safe-area-inset-bottom));
+      background: linear-gradient(transparent, rgba(0,0,0,0.85));
+      z-index: 15;
+    }
+    .camera-controls.show { display: flex; }
+    
+    .shutter-btn {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      background: #fff;
+      border: 6px solid #ccc;
+      cursor: pointer;
+      transition: transform 0.1s;
+    }
+    .shutter-btn:active { transform: scale(0.92); background: #eee; }
+
+    .cancel-cam-btn {
+      position: absolute;
+      left: 20px;
+      background: rgba(46,46,46,0.92);
+      color: #ddd;
+      border: none;
+      padding: 12px 18px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+    }
 
     #snapshot {
       position: absolute;
@@ -533,52 +577,51 @@
     }
     .debug-actions .btn { flex: 1; }
 
-    /* ── Footer ──────────────────────────────────────── */
-
-    .footer {
-      flex-shrink: 0;
+    /* ── Pick buttons (idle state) ──────────────────────── */
+    .pick-btns {
       display: flex;
+      flex-direction: column;
       align-items: center;
-      justify-content: center;
-      padding: 18px 24px;
-      padding-bottom: max(18px, env(safe-area-inset-bottom));
-      background: #1c1c1c;
-      border-top: 1px solid #2c2c2c;
-      min-height: 88px;
+      gap: 14px;
+      width: 100%;
+      max-width: 300px;
+      padding: 0 24px;
     }
-
-    .capture-btn {
-      width: 64px;
-      height: 64px;
-      border-radius: 50%;
-      border: 3px solid rgba(255, 255, 255, 0.8);
-      background: rgba(255, 255, 255, 0.1);
+    .pick-btn {
+      width: 100%;
+      padding: 16px 20px;
+      border-radius: 14px;
+      font-size: 16px;
+      font-weight: 600;
+      border: none;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: transform 0.1s ease, background 0.1s ease;
+      gap: 10px;
+      transition: transform 0.12s ease, opacity 0.12s;
     }
-    .capture-btn:active {
-      transform: scale(0.9);
-      background: rgba(255, 255, 255, 0.22);
-    }
-    .capture-btn-dot {
-      width: 48px;
-      height: 48px;
-      border-radius: 50%;
-      background: #fff;
-      pointer-events: none;
-    }
+    .pick-btn:active { transform: scale(0.97); opacity: 0.85; }
+    .pick-btn-camera { background: #2563eb; color: #fff; }
+    .pick-btn-upload { background: #2e2e2e; color: #ccc; }
 
-    .action-btns {
+    /* ── Action bar overlay (shown over photo after load) ── */
+    .action-bar {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
       display: none;
+      align-items: center;
       gap: 12px;
+      padding: 20px 16px;
+      padding-bottom: max(20px, env(safe-area-inset-bottom));
+      background: linear-gradient(transparent, rgba(0,0,0,0.72));
+      z-index: 21;
     }
-    .action-btns.show { display: flex; }
+    .action-bar.show { display: flex; }
 
     .btn {
-      padding: 13px 26px;
+      flex: 1;
+      padding: 13px 16px;
       border-radius: 10px;
       font-size: 15px;
       font-weight: 600;
@@ -587,16 +630,8 @@
       transition: transform 0.1s ease;
     }
     .btn:active { transform: scale(0.96); }
-
-    .btn-retake {
-      background: #2e2e2e;
-      color: #ddd;
-    }
-
-    .btn-analyze {
-      background: #2563eb;
-      color: #fff;
-    }
+    .btn-retake  { background: rgba(46,46,46,0.92); color: #ddd; }
+    .btn-analyze { background: #2563eb; color: #fff; }
     .btn-analyze:disabled {
       background: #1a2f5e;
       color: #4e71b5;
@@ -629,21 +664,8 @@
       .section-tabs { flex-direction: column; }
       .tab-btn { padding: 6px 10px; font-size: 12px; }
 
-      /* Right sidebar */
-      .footer {
-        flex-direction: column;
-        width: auto;
-        min-height: 0;
-        border-top: none;
-        border-left: 1px solid #2c2c2c;
-        padding: 16px 10px;
-        padding-right: max(10px, env(safe-area-inset-right));
-        padding-bottom: max(16px, env(safe-area-inset-bottom));
-        justify-content: center;
-        gap: 12px;
-      }
-      .action-btns { flex-direction: column; }
-      .btn { padding: 10px 16px; font-size: 13px; }
+      .pick-btns { flex-direction: row; max-width: none; padding: 0 16px; }
+      .action-bar { flex-direction: row; }
     }
   </style>
 </head>
@@ -670,41 +692,57 @@
     <!-- photo-area is the containing block for canvas and all absolute overlays -->
     <div class="photo-area" id="photoArea">
       <div class="photo-placeholder" id="photoPlaceholder">
-        <svg xmlns="http://www.w3.org/2000/svg" width="56" height="56" viewBox="0 0 24 24"
-             fill="none" stroke="currentColor" stroke-width="1.3"
-             stroke-linecap="round" stroke-linejoin="round">
-          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-          <circle cx="12" cy="13" r="4"/>
-        </svg>
-        <p>Tap the button below to photograph a shelf</p>
+        <div class="pick-btns">
+          <button class="pick-btn pick-btn-camera" id="takePicBtn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+              <circle cx="12" cy="13" r="4"/>
+            </svg>
+            Take Photo
+          </button>
+          <button class="pick-btn pick-btn-upload" id="uploadPicBtn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="16 16 12 12 8 16"/>
+              <line x1="12" y1="12" x2="12" y2="21"/>
+              <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>
+            </svg>
+            Upload Image
+          </button>
+        </div>
+      </div>
+      <video id="videoFeed" playsinline muted autoplay></video>
+      <div class="camera-controls" id="cameraControls">
+        <button class="cancel-cam-btn" id="cancelCamBtn">Cancel</button>
+        <button class="shutter-btn" id="shutterBtn" aria-label="Take Photo"></button>
       </div>
       <canvas id="snapshot"></canvas>
+      <div class="action-bar" id="actionBar">
+        <button class="btn btn-retake"  id="retakeBtn">Retake</button>
+        <button class="btn btn-analyze" id="analyzeBtn" disabled>Analyze</button>
+      </div>
     </div>
     <!-- loading overlay, results overlay, book-inspect appended here by JS -->
   </div>
 
-  <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none">
-
-  <footer class="footer">
-    <button class="capture-btn" id="captureBtn" aria-label="Take photo">
-      <div class="capture-btn-dot"></div>
-    </button>
-    <div class="action-btns" id="actionBtns">
-      <button class="btn btn-retake"  id="retakeBtn">Retake</button>
-      <button class="btn btn-analyze" id="analyzeBtn" disabled>Analyze</button>
-    </div>
-  </footer>
+  <input type="file" id="photoInput"  accept="image/*" capture="environment" style="display:none">
+  <input type="file" id="uploadInput" accept="image/*" style="display:none">
 
   <script>
-    const photoInput      = document.getElementById('photoInput');
+    const photoInput       = document.getElementById('photoInput');
+    const uploadInput      = document.getElementById('uploadInput');
     const photoPlaceholder = document.getElementById('photoPlaceholder');
-    const snapshot        = document.getElementById('snapshot');
-    const captureBtn      = document.getElementById('captureBtn');
-    const actionBtns      = document.getElementById('actionBtns');
-    const retakeBtn       = document.getElementById('retakeBtn');
-    const analyzeBtn      = document.getElementById('analyzeBtn');
-    const cameraWrap      = document.getElementById('cameraWrap');
-    const photoArea       = document.getElementById('photoArea');
+    const takePicBtn       = document.getElementById('takePicBtn');
+    const uploadPicBtn     = document.getElementById('uploadPicBtn');
+    const snapshot         = document.getElementById('snapshot');
+    const actionBar        = document.getElementById('actionBar');
+    const retakeBtn        = document.getElementById('retakeBtn');
+    const analyzeBtn       = document.getElementById('analyzeBtn');
+    const cameraWrap       = document.getElementById('cameraWrap');
+    const photoArea        = document.getElementById('photoArea');
     // Section toggle — remembers the last-used section across reloads.
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -726,7 +764,7 @@
       }
     } catch {}
 
-    // ── Photo picker (native camera app) ─────────────────
+    // ── Photo picker ──────────────────────────────────────
     function loadPhoto(file) {
       const url = URL.createObjectURL(file);
       const img = new Image();
@@ -737,8 +775,7 @@
         URL.revokeObjectURL(url);
         photoPlaceholder.style.display = 'none';
         snapshot.style.display         = 'block';
-        captureBtn.style.display       = 'none';
-        actionBtns.classList.add('show');
+        actionBar.classList.add('show');
         analyzeBtn.disabled = false;
       };
       img.src = url;
@@ -747,18 +784,64 @@
     function retake() {
       snapshot.style.display         = 'none';
       photoPlaceholder.style.display = '';
-      captureBtn.style.display       = '';
-      actionBtns.classList.remove('show');
+      actionBar.classList.remove('show');
       analyzeBtn.disabled    = true;
       analyzeBtn.textContent = 'Analyze';
       photoInput.value       = '';
+      uploadInput.value      = '';
     }
 
-    captureBtn.addEventListener('click', () => photoInput.click());
-    retakeBtn.addEventListener('click', retake);
-    photoInput.addEventListener('change', () => {
-      if (photoInput.files[0]) loadPhoto(photoInput.files[0]);
+    let cameraStream = null;
+
+    async function startCamera() {
+      try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+          audio: false
+        });
+        const videoFeed = document.getElementById('videoFeed');
+        videoFeed.srcObject = cameraStream;
+        videoFeed.style.display = 'block';
+        document.getElementById('cameraControls').classList.add('show');
+        photoPlaceholder.style.display = 'none';
+        snapshot.style.display = 'none';
+        actionBar.classList.remove('show');
+        document.getElementById('errorBanner')?.remove();
+      } catch (err) {
+        showErrorBanner('Could not access camera. Try uploading a photo instead.', () => {});
+      }
+    }
+
+    function stopCamera() {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(t => t.stop());
+        cameraStream = null;
+      }
+      document.getElementById('videoFeed').style.display = 'none';
+      document.getElementById('cameraControls').classList.remove('show');
+    }
+
+    document.getElementById('cancelCamBtn').addEventListener('click', () => {
+      stopCamera();
+      photoPlaceholder.style.display = '';
     });
+
+    document.getElementById('shutterBtn').addEventListener('click', () => {
+      const videoFeed = document.getElementById('videoFeed');
+      snapshot.width = videoFeed.videoWidth || 1080;
+      snapshot.height = videoFeed.videoHeight || 1920;
+      snapshot.getContext('2d').drawImage(videoFeed, 0, 0);
+      stopCamera();
+      snapshot.style.display = 'block';
+      actionBar.classList.add('show');
+      analyzeBtn.disabled = false;
+    });
+
+    takePicBtn.addEventListener('click', startCamera);
+    uploadPicBtn.addEventListener('click', () => uploadInput.click());
+    retakeBtn.addEventListener('click', retake);
+    photoInput.addEventListener('change',  () => { if (photoInput.files[0])  loadPhoto(photoInput.files[0]); });
+    uploadInput.addEventListener('change', () => { if (uploadInput.files[0]) loadPhoto(uploadInput.files[0]); });
 
     // ── Gemini API ────────────────────────────────────────
     const GEMINI_URL = 'https://selfcheck-proxy.krish-sundareswar.workers.dev/';
