@@ -539,14 +539,16 @@
     els.progressBar.style.width = '0%';
 
     try {
-      const small = fitCanvas(canvas, 2048);
+      // Nonfiction Dewey stickers are small — needs higher resolution than fiction labels
+      const small = fitCanvas(canvas, mode === 'nonfiction' ? 1280 : 1024);
       let raw;
       try {
         setStep(0); setProcess('Uploading photo…', 8);
         // Give the bar a head start, then hand off to the crawl
         await new Promise(r => setTimeout(r, 300));
-        setStep(1); setProcess('About 20 seconds — keep this page open', null);
-        const stopCrawl = startCrawl(12, 78, 19000);
+        const etaSec = mode === 'nonfiction' ? 45 : 20;
+        setStep(1); setProcess(`About ${etaSec} seconds — keep this page open`, null);
+        const stopCrawl = startCrawl(12, 78, (etaSec - 2) * 1000);
         raw = await ocrViaBackend(small);
         stopCrawl();
         doneStep(0); doneStep(1);
