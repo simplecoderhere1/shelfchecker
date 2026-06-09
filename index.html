@@ -88,13 +88,20 @@
       min-height: 0;
     }
 
-    #video {
+    /* Idle placeholder shown before any photo is loaded */
+    .photo-placeholder {
       position: absolute;
       inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      color: #555;
+      pointer-events: none;
     }
+    .photo-placeholder svg { opacity: 0.45; }
+    .photo-placeholder p { font-size: 14px; line-height: 1.6; text-align: center; max-width: 220px; }
 
     #snapshot {
       position: absolute;
@@ -103,55 +110,6 @@
       height: 100%;
       object-fit: contain;
       display: none;
-    }
-
-    /* Camera error state */
-    .cam-error {
-      position: absolute;
-      inset: 0;
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 14px;
-      padding: 32px;
-      text-align: center;
-      color: #666;
-      z-index: 20;
-    }
-    .cam-error.show { display: flex; }
-    .cam-error p { font-size: 14px; line-height: 1.65; max-width: 260px; }
-
-    /* Zoom indicator */
-    .zoom-indicator {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      z-index: 15;
-      background: rgba(0,0,0,0.6);
-      color: #fff;
-      font-size: 18px;
-      font-weight: 700;
-      padding: 8px 18px;
-      border-radius: 20px;
-      opacity: 0;
-      transition: opacity 0.3s;
-      pointer-events: none;
-    }
-
-    /* Capture flash */
-    @keyframes flash {
-      0%   { opacity: 0.7; }
-      100% { opacity: 0; }
-    }
-    .capture-flash {
-      position: absolute;
-      inset: 0;
-      background: #fff;
-      pointer-events: none;
-      z-index: 18;
-      animation: flash 0.25s ease-out forwards;
     }
 
     /* Loading overlay */
@@ -694,8 +652,7 @@
   <header class="header">
     <span class="app-name">ShelfCheck</span>
     <div class="section-tabs" role="group" aria-label="Collection section">
-      <button class="tab-btn active" data-section="auto">Auto</button>
-      <button class="tab-btn"        data-section="fiction">Fiction</button>
+      <button class="tab-btn active" data-section="fiction">Fiction</button>
       <button class="tab-btn"        data-section="nonfiction">Nonfiction</button>
     </div>
     <div style="position:relative">
@@ -710,27 +667,26 @@
   </header>
 
   <div class="camera-wrap" id="cameraWrap">
-    <!-- photo-area is the containing block for video/canvas and all their absolute overlays -->
+    <!-- photo-area is the containing block for canvas and all absolute overlays -->
     <div class="photo-area" id="photoArea">
-      <video id="video" autoplay playsinline muted></video>
-      <canvas id="snapshot"></canvas>
-      <div class="zoom-indicator" id="zoomIndicator"></div>
-
-      <div class="cam-error" id="camError">
-        <svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 24 24"
-             fill="none" stroke="currentColor" stroke-width="1.2"
+      <div class="photo-placeholder" id="photoPlaceholder">
+        <svg xmlns="http://www.w3.org/2000/svg" width="56" height="56" viewBox="0 0 24 24"
+             fill="none" stroke="currentColor" stroke-width="1.3"
              stroke-linecap="round" stroke-linejoin="round">
           <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-          <line x1="1" y1="1" x2="23" y2="23"/>
+          <circle cx="12" cy="13" r="4"/>
         </svg>
-        <p>Camera access is required.<br>Please allow permissions and reload.</p>
+        <p>Tap the button below to photograph a shelf</p>
       </div>
+      <canvas id="snapshot"></canvas>
     </div>
-    <!-- step-through, loading overlay, results overlay, book-inspect appended here by JS -->
+    <!-- loading overlay, results overlay, book-inspect appended here by JS -->
   </div>
 
+  <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none">
+
   <footer class="footer">
-    <button class="capture-btn" id="captureBtn" aria-label="Capture photo">
+    <button class="capture-btn" id="captureBtn" aria-label="Take photo">
       <div class="capture-btn-dot"></div>
     </button>
     <div class="action-btns" id="actionBtns">
@@ -740,16 +696,15 @@
   </footer>
 
   <script>
-    const video         = document.getElementById('video');
-    const snapshot      = document.getElementById('snapshot');
-    const captureBtn    = document.getElementById('captureBtn');
-    const actionBtns    = document.getElementById('actionBtns');
-    const retakeBtn     = document.getElementById('retakeBtn');
-    const analyzeBtn    = document.getElementById('analyzeBtn');
-    const camError      = document.getElementById('camError');
-    const cameraWrap    = document.getElementById('cameraWrap');
-    const photoArea     = document.getElementById('photoArea');
-    const zoomIndicator = document.getElementById('zoomIndicator');
+    const photoInput      = document.getElementById('photoInput');
+    const photoPlaceholder = document.getElementById('photoPlaceholder');
+    const snapshot        = document.getElementById('snapshot');
+    const captureBtn      = document.getElementById('captureBtn');
+    const actionBtns      = document.getElementById('actionBtns');
+    const retakeBtn       = document.getElementById('retakeBtn');
+    const analyzeBtn      = document.getElementById('analyzeBtn');
+    const cameraWrap      = document.getElementById('cameraWrap');
+    const photoArea       = document.getElementById('photoArea');
     // Section toggle — remembers the last-used section across reloads.
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -771,137 +726,39 @@
       }
     } catch {}
 
-    // ── Camera + zoom setup ───────────────────────────────
-    let videoTrack = null;
-    let zoomCaps   = null;
-    let currentZoom = 1;
-
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: 'environment' },
-            width:  { ideal: 3840 },
-            height: { ideal: 2160 },
-          },
-          audio: false,
-        });
-        video.srcObject = stream;
-        videoTrack = stream.getVideoTracks()[0];
-        const caps = videoTrack.getCapabilities?.() || {};
-        if (caps.zoom) {
-          zoomCaps    = caps.zoom;
-          currentZoom = caps.zoom.min || 1;
-        }
-      } catch {
-        video.style.display = 'none';
-        camError.classList.add('show');
-        captureBtn.disabled      = true;
-        captureBtn.style.opacity = '0.35';
-      }
+    // ── Photo picker (native camera app) ─────────────────
+    function loadPhoto(file) {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        snapshot.width  = img.naturalWidth;
+        snapshot.height = img.naturalHeight;
+        snapshot.getContext('2d').drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+        photoPlaceholder.style.display = 'none';
+        snapshot.style.display         = 'block';
+        captureBtn.style.display       = 'none';
+        actionBtns.classList.add('show');
+        analyzeBtn.disabled = false;
+      };
+      img.src = url;
     }
 
-    // ── Pinch to zoom ─────────────────────────────────────
-    let lastPinchDist = null;
-    let zoomHideTimer = null;
-
-    function getPinchDist(touches) {
-      const dx = touches[0].clientX - touches[1].clientX;
-      const dy = touches[0].clientY - touches[1].clientY;
-      return Math.sqrt(dx * dx + dy * dy);
-    }
-
-    function showZoom(zoom, atMin) {
-      zoomIndicator.textContent = zoom.toFixed(1) + '×' + (atMin ? ' (min)' : '');
-      zoomIndicator.style.opacity = '1';
-      clearTimeout(zoomHideTimer);
-      zoomHideTimer = setTimeout(() => zoomIndicator.style.opacity = '0', 1500);
-    }
-
-    function applyZoom(newZoom) {
-      if (!zoomCaps || !videoTrack) return;
-      currentZoom = Math.min(zoomCaps.max, Math.max(zoomCaps.min, newZoom));
-      videoTrack.applyConstraints({ advanced: [{ zoom: currentZoom }] }).catch(() => {});
-      showZoom(currentZoom, newZoom < zoomCaps.min);
-    }
-
-    cameraWrap.addEventListener('touchstart', e => {
-      if (e.touches.length === 2) lastPinchDist = getPinchDist(e.touches);
-    }, { passive: true });
-
-    cameraWrap.addEventListener('touchmove', e => {
-      if (e.touches.length !== 2 || lastPinchDist === null) return;
-      const dist  = getPinchDist(e.touches);
-      const delta = dist / lastPinchDist;
-      lastPinchDist = dist;
-
-      if (zoomCaps && videoTrack) {
-        applyZoom(currentZoom * delta);
-      }
-    }, { passive: true });
-
-    cameraWrap.addEventListener('touchend', e => {
-      if (e.touches.length < 2) lastPinchDist = null;
-    }, { passive: true });
-
-    // ── Capture: full visible area ───────────────────────
-    function capture() {
-      const cw  = photoArea.clientWidth;
-      const ch  = photoArea.clientHeight;
-      const dpr = window.devicePixelRatio || 1;
-      const vw  = video.videoWidth  || cw;
-      const vh  = video.videoHeight || ch;
-
-      // Video is shown with object-fit:cover, which crops some sensor pixels to
-      // fill the viewfinder. Capture exactly the visible region so the snapshot
-      // matches what the user framed on screen.
-      const scale = Math.max(cw / vw, ch / vh);
-      const visW  = cw / scale;
-      const visH  = ch / scale;
-      const sx    = (vw - visW) / 2;
-      const sy    = (vh - visH) / 2;
-
-      snapshot.width  = Math.round(cw * dpr);
-      snapshot.height = Math.round(ch * dpr);
-      snapshot.getContext('2d').drawImage(
-        video,
-        sx, sy, visW, visH,
-        0, 0, snapshot.width, snapshot.height
-      );
-
-      // Flash animation
-      const flash = document.createElement('div');
-      flash.className = 'capture-flash';
-      photoArea.appendChild(flash);
-      flash.addEventListener('animationend', () => flash.remove());
-
-      snapshot.style.display   = 'block';
-      captureBtn.style.display = 'none';
-      actionBtns.classList.add('show');
-      analyzeBtn.disabled = false;
-    }
-
-    // ── Retake ────────────────────────────────────────────
     function retake() {
-      snapshot.style.display   = 'none';
-      video.style.display      = '';
-      captureBtn.style.display = '';
-      captureBtn.disabled      = false;
+      snapshot.style.display         = 'none';
+      photoPlaceholder.style.display = '';
+      captureBtn.style.display       = '';
       actionBtns.classList.remove('show');
-      analyzeBtn.disabled      = true;
-      analyzeBtn.textContent   = 'Analyze';
-
-      // On mobile, the camera track often ends or pauses during the analysis
-      // round-trip. Resume if we can; restart the stream entirely if not.
-      if (videoTrack && videoTrack.readyState === 'ended') {
-        startCamera();
-      } else if (video.paused) {
-        video.play().catch(() => startCamera());
-      }
+      analyzeBtn.disabled    = true;
+      analyzeBtn.textContent = 'Analyze';
+      photoInput.value       = '';
     }
 
-    captureBtn.addEventListener('click', capture);
+    captureBtn.addEventListener('click', () => photoInput.click());
     retakeBtn.addEventListener('click', retake);
+    photoInput.addEventListener('change', () => {
+      if (photoInput.files[0]) loadPhoto(photoInput.files[0]);
+    });
 
     // ── Gemini API ────────────────────────────────────────
     const GEMINI_URL = 'https://selfcheck-proxy.krish-sundareswar.workers.dev/';
@@ -918,8 +775,7 @@
     function buildPrompt(section) {
       const sec =
         section === 'nonfiction' ? 'This is a NONFICTION shelf (books sort by Dewey/call number — put it in "l").'
-        : section === 'fiction'  ? 'This is a FICTION shelf (books sort by author surname).'
-        : 'Each book is fiction (sorts by author surname) or nonfiction (sorts by Dewey number — put it in "l").';
+        : 'This is a FICTION shelf (books sort by author surname).';
 
       return `Read every book spine in this library shelf photo, left-to-right and top-to-bottom.
 Return ONLY a JSON array. Each spine = one object with these short keys:
@@ -1338,18 +1194,7 @@ Example: [{"a":"BLACK","t":"Murder in Clichy","l":"BLACK, Cara 5","v":5,"c":1,"b
         return d ? { kind: 'dewey', val: d, vol, title } : null;
       }
 
-      // auto: spine_label > Dewey-shaped call_number > author_last
-      if (book.spine_label) {
-        const d = parseDewey(book.spine_label);
-        if (d && d.num !== null) return { kind: 'dewey', val: d, vol, title };
-        const k = strKeyFromAuthorish(book.spine_label);
-        if (k) return k;
-      }
-      if (book.call_number && /^\s*\d/.test(book.call_number)) {
-        const d = parseDewey(book.call_number);
-        if (d) return { kind: 'dewey', val: d, vol, title };
-      }
-      if (lowConfNoLabel) return null;
+      // unknown section → treat as fiction
       return strKeyFromAuthorish(book.author_last);
     }
 
@@ -2286,8 +2131,6 @@ Example: [{"a":"BLACK","t":"Murder in Clichy","l":"BLACK, Cara 5","v":5,"c":1,"b
       };
     }
 
-    // Auto-start camera on load
-    startCamera();
     maybeShowFirstHint();
   </script>
 
