@@ -220,27 +220,27 @@
     .badge-warn         { background: #450a0a; color: #f87171; }
     .badge-unverifiable { background: #713f12; color: #fde047; }
 
-    /* Highlight boxes drawn over flagged book spines */
+    /* Small highlight over the white label at the foot of a flagged spine */
     .book-boxes {
       position: absolute;
       inset: 0;
       z-index: 19;
       pointer-events: none;   /* taps fall through to the snapshot for inspect */
     }
-    .book-box {
+    .label-mark {
       position: absolute;
-      border-radius: 4px;
+      border-radius: 3px;
       box-sizing: border-box;
     }
-    .book-box-bad {
-      border: 3px solid #ef4444;
-      background: rgba(239, 68, 68, 0.18);
-      box-shadow: 0 0 0 1px rgba(0,0,0,0.4), 0 0 12px rgba(239,68,68,0.5);
+    .label-mark-bad {
+      border: 2px solid #ef4444;
+      background: rgba(239, 68, 68, 0.35);
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 0 10px rgba(239,68,68,0.6);
     }
-    .book-box-unv {
-      border: 3px solid #facc15;
-      background: rgba(250, 204, 21, 0.14);
-      box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
+    .label-mark-unv {
+      border: 2px solid #facc15;
+      background: rgba(250, 204, 21, 0.30);
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.5);
     }
 
     /* Inline error banner */
@@ -906,7 +906,7 @@
     // ── Gemini API ────────────────────────────────────────
     const GEMINI_URL = 'https://selfcheck-proxy.krish-sundareswar.workers.dev/';
 
-    const GEMINI_MODEL = 'gemini-3.5-flash';
+    const GEMINI_MODEL = 'gemini-3.1-flash-lite';
 
     function getSection() {
       return document.querySelector('.tab-btn.active').dataset.section;
@@ -969,7 +969,9 @@ Example: [{"a":"BLACK","t":"Murder in Clichy","l":"BLACK, Cara 5","v":5,"c":1,"b
     }
 
     // Resize snapshot and return a single base64 JPEG for the API request.
-    function getResizedImageData(maxDim = 3072, quality = 0.92) {
+    // 2048px / q0.82: fewer image tiles for the model to prefill (the main remaining
+    // latency cost) and a smaller upload. Spine labels stay legible at this size.
+    function getResizedImageData(maxDim = 2048, quality = 0.82) {
       const W = snapshot.width;
       const H = snapshot.height;
       const scale = Math.min(1, maxDim / Math.max(W, H));
@@ -1002,11 +1004,11 @@ Example: [{"a":"BLACK","t":"Murder in Clichy","l":"BLACK, Cara 5","v":5,"c":1,"b
         <div class="loading-pct" id="loadingPct">0%</div>`;
       photoArea.appendChild(overlay);
 
-      // Simulate progress: ease toward 85% over ~5s, then crawl toward 95%
+      // Simulate progress: ease toward 85% over ~3s, then crawl toward 95%
       const fill = document.getElementById('loadingBarFill');
       const pct  = document.getElementById('loadingPct');
       const start = performance.now();
-      const EASE_DURATION = 5000;  // reach 85% in 5s
+      const EASE_DURATION = 3000;  // reach 85% in 3s (flash-lite is fast)
       loadingTimer = setInterval(() => {
         const t = (performance.now() - start) / EASE_DURATION;
         let p;
@@ -1703,8 +1705,8 @@ Example: [{"a":"BLACK","t":"Murder in Clichy","l":"BLACK, Cara 5","v":5,"c":1,"b
       };
     }
 
-    // Draw a box over each flagged book: red = out of order, yellow = couldn't read.
-    // In-order books are left unmarked so the problems stand out.
+    // Mark only the white LABEL at the foot of each flagged spine (small + unobtrusive):
+    // red = out of order, yellow = couldn't read. In-order books stay unmarked.
     function renderBoxes() {
       document.getElementById('bookBoxes')?.remove();
       const flagged = lastCheckedBooks.filter(b => b.bounding_box && (b.outOfOrder || b.unverifiable));
@@ -1717,13 +1719,15 @@ Example: [{"a":"BLACK","t":"Murder in Clichy","l":"BLACK, Cara 5","v":5,"c":1,"b
 
       for (const b of flagged) {
         const r = bbToRect(b.bounding_box);
-        const box = document.createElement('div');
-        box.className = 'book-box ' + (b.outOfOrder ? 'book-box-bad' : 'book-box-unv');
-        box.style.left   = `${r.left}px`;
-        box.style.top    = `${r.top}px`;
-        box.style.width  = `${r.width}px`;
-        box.style.height = `${r.height}px`;
-        wrap.appendChild(box);
+        // Label sits at the bottom of the spine — highlight just that strip.
+        const labelH = Math.max(12, Math.min(r.height * 0.16, 30));
+        const mark = document.createElement('div');
+        mark.className = 'label-mark ' + (b.outOfOrder ? 'label-mark-bad' : 'label-mark-unv');
+        mark.style.left   = `${r.left}px`;
+        mark.style.top    = `${r.top + r.height - labelH}px`;
+        mark.style.width  = `${r.width}px`;
+        mark.style.height = `${labelH}px`;
+        wrap.appendChild(mark);
       }
     }
 
