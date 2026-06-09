@@ -749,28 +749,30 @@
         return `This is a library NONFICTION shelf photo. There may be multiple shelves.
 Read every book spine left-to-right, top shelf first, then lower shelves.
 Return ONLY a JSON array of arrays, one per book spine.
-Each inner array has exactly 3 elements:
+Each inner array has exactly 4 elements:
 0: full text on the white sticker at the bottom of the spine (e.g. "973.7 HAR", "KIN"), or null if unreadable.
 1: book title from the spine, or null if unreadable.
 2: 1 if you read the white sticker clearly, 0 if unsure.
+3: bounding box of that spine as [ymin,xmin,ymax,xmax] normalized 0–1000, tight to just that one spine, never spanning neighbors or shelves.
 Rules: the white bottom sticker is the primary sort key — read it first. Return null and 0 for element 2 if you cannot read the sticker. Never copy a neighbor's text.
-Example: [["973.7 HAR","Lincoln",1],["KIN","The Stand",1]]`;
+Example: [["973.7 HAR","Lincoln",1,[420,10,980,85]],["KIN","The Stand",1,[420,90,980,170]]]`;
       }
 
       return `This is a library FICTION shelf photo. There may be multiple shelves.
 Read every book spine left-to-right, top shelf first, then lower shelves.
 Return ONLY a JSON array of arrays, one per book spine.
-Each inner array has exactly 3 elements:
+Each inner array has exactly 4 elements:
 0: full text on the white sticker at the bottom of the spine (e.g. "BLACK, Cara", "BLACK, Cara 5"), or null if unreadable.
 1: book title from the spine, or null if unreadable.
 2: 1 if you read the white sticker clearly, 0 if unsure.
+3: bounding box of that spine as [ymin,xmin,ymax,xmax] normalized 0–1000, tight to just that one spine, never spanning neighbors or shelves.
 Rules: the white bottom sticker is the primary sort key — read it first. Return null and 0 for element 2 if you cannot read the sticker. Never copy a neighbor's text.
-Example: [["BLACK, Cara","Murder in Clichy",1],["KING, Stephen","The Stand",1]]`;
+Example: [["BLACK, Cara","Murder in Clichy",1,[420,10,980,85]],["KING, Stephen","The Stand",1,[420,90,980,170]]]`;
     }
 
-    // Expand the 3-element wire format [spine_label, title, confidence].
-    // bounding_box is filled in afterwards by detectLabelBoxes().
+    // Expand the 4-element wire format [spine_label, title, confidence, box].
     function expandBook(arr) {
+      const box = Array.isArray(arr[3]) && arr[3].length === 4 ? arr[3] : null;
       return {
         author_last:   null,
         title:         arr[1] ?? null,
@@ -778,105 +780,10 @@ Example: [["BLACK, Cara","Murder in Clichy",1],["KING, Stephen","The Stand",1]]`
         call_number:   null,
         series_volume: null,
         confidence:    arr[2] === 1 ? 'high' : 'low',
-        bounding_box:  null,
+        bounding_box:  box,
       };
     }
 
-    // Detect white spine-label stickers across the full image using Canvas pixel data.
-    // Scans in horizontal strips, clusters white-column runs into blobs, then groups
-    // blobs by Y-gap into shelf rows and sorts each row left-to-right.
-    // Returns boxes normalized 0-1000 in the same top-shelf-first, left-to-right order
-    // that Gemini uses, so they can be matched to books by index.
-    function detectLabelBoxes() {
-      const W = snapshot.width, H = snapshot.height;
-      const scale = Math.min(1, 600 / W);
-      const sw = Math.round(W * scale), sh = Math.round(H * scale);
-
-      const tmp = document.createElement('canvas');
-      tmp.width = sw; tmp.height = sh;
-      tmp.getContext('2d').drawImage(snapshot, 0, 0, sw, sh);
-      const data = tmp.getContext('2d').getImageData(0, 0, sw, sh).data;
-
-      // White pixel mask — bright and low-saturation
-      const white = new Uint8Array(sw * sh);
-      for (let i = 0, p = 0; i < data.length; i += 4, p++) {
-        const r = data[i], g = data[i + 1], b = data[i + 2];
-        if (r > 200 && g > 200 && b > 200 && Math.max(r, g, b) - Math.min(r, g, b) < 50) {
-          white[p] = 1;
-        }
-      }
-
-      // Scan in horizontal strips; find column runs that are mostly white within each strip
-      const STRIP_H = Math.max(4, Math.round(sh * 0.025));
-      const rawBlobs = []; // { x0, y0, x1, y1 }
-
-      for (let y0 = 0; y0 < sh; y0 += STRIP_H) {
-        const y1 = Math.min(y0 + STRIP_H - 1, sh - 1);
-        const stripH = y1 - y0 + 1;
-
-        const colWhite = new Uint16Array(sw);
-        for (let y = y0; y <= y1; y++)
-          for (let x = 0; x < sw; x++)
-            if (white[y * sw + x]) colWhite[x]++;
-
-        const thresh = stripH * 0.4;
-        let inRun = false, runStart = 0;
-        for (let x = 0; x <= sw; x++) {
-          const on = x < sw && colWhite[x] >= thresh;
-          if (on && !inRun)  { inRun = true; runStart = x; }
-          if (!on && inRun)  {
-            inRun = false;
-            const rw = x - runStart;
-            if (rw >= sw * 0.015 && rw <= sw * 0.25) {
-              // Try to extend an existing blob that overlaps in X and is adjacent in Y
-              let merged = false;
-              for (const b of rawBlobs) {
-                const overlapX = Math.min(x - 1, b.x1) - Math.max(runStart, b.x0);
-                if (overlapX >= 0 && y0 <= b.y1 + STRIP_H * 2) {
-                  b.x0 = Math.min(b.x0, runStart);
-                  b.x1 = Math.max(b.x1, x - 1);
-                  b.y1 = y1;
-                  merged = true;
-                  break;
-                }
-              }
-              if (!merged) rawBlobs.push({ x0: runStart, y0, x1: x - 1, y1 });
-            }
-          }
-        }
-      }
-
-      // Keep only blobs that are at least as wide as they are tall (horizontal stickers)
-      const valid = rawBlobs.filter(b => (b.x1 - b.x0) >= (b.y1 - b.y0) * 0.8);
-      if (valid.length === 0) return [];
-
-      // Sort by Y-center for shelf clustering
-      valid.sort((a, b) => (a.y0 + a.y1) - (b.y0 + b.y1));
-
-      // Cluster into shelf rows by Y-gap
-      const medH = [...valid.map(b => b.y1 - b.y0)].sort((a, b) => a - b)[Math.floor(valid.length / 2)];
-      const shelfGap = medH * 2.5;
-      const shelves = [[valid[0]]];
-      for (let i = 1; i < valid.length; i++) {
-        const prev = valid[i - 1], cur = valid[i];
-        if ((cur.y0 + cur.y1) / 2 - (prev.y0 + prev.y1) / 2 > shelfGap) shelves.push([]);
-        shelves[shelves.length - 1].push(cur);
-      }
-
-      // Sort each shelf left-to-right, then flatten
-      return shelves
-        .flatMap(shelf => shelf.sort((a, b) => (a.x0 + a.x1) - (b.x0 + b.x1)))
-        .map(b => [
-          Math.round((b.y0 / sh) * 1000),
-          Math.round((b.x0 / sw) * 1000),
-          Math.round((b.y1 / sh) * 1000),
-          Math.round((b.x1 / sw) * 1000),
-        ]);
-    }
-
-    // Detect white spine-label stickers using Canvas pixel data.
-    // Scans the bottom 35% of the image for bright, low-saturation (white) regions,
-    // groups them into per-book label blobs, and returns boxes normalized 0-1000.
     // Downscale via step-halving to avoid bilinear smearing on large reductions.
     function stepDownscale(srcCanvas, targetW, targetH) {
       let cur = srcCanvas;
@@ -992,18 +899,8 @@ Example: [["BLACK, Cara","Murder in Clichy",1],["KING, Stephen","The Stand",1]]`
 
       try {
         const tApi0 = performance.now();
-        // Run Gemini (slow, network) and canvas label detection (fast, local) in parallel.
-        // Canvas detects white sticker rectangles across the full image, grouped by shelf,
-        // sorted top-shelf-first left-to-right — the same order Gemini uses for books.
-        const [books, boxes] = await Promise.all([
-          callGemini(prompt, image),
-          Promise.resolve(detectLabelBoxes()),
-        ]);
+        const books = await callGemini(prompt, image);
         const apiTime = Math.round(performance.now() - tApi0);
-
-        // Match boxes to books by index. If counts diverge, assign what we can;
-        // unmatched books get null bounding_box → grouped as unverifiable rather than crashing.
-        books.forEach((b, i) => { if (boxes[i]) b.bounding_box = boxes[i]; });
 
         success = true;
         showResults(books, section);
