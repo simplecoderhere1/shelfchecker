@@ -754,7 +754,8 @@ Each inner array has exactly 4 elements:
 1: book title from the spine, or null if unreadable.
 2: 1 if you read the white sticker clearly, 0 if unsure.
 3: bounding box of that spine as [ymin,xmin,ymax,xmax] normalized 0–1000, tight to just that one spine, never spanning neighbors or shelves.
-Rules: the white bottom sticker is the primary sort key — read it first. Return null and 0 for element 2 if you cannot read the sticker. Never copy a neighbor's text.
+CRITICAL for element 0: read the sticker character-by-character exactly as printed. The cutter letters come from the AUTHOR'S last name, NOT from the title. Never infer or guess the cutter from the title — e.g. "The New Organic Grower" by Coleman has sticker "635.04 COL", not "635.04 THE". If you cannot read it clearly, return null.
+Never copy a neighbor's label.
 Example: [["973.7 HAR","Lincoln",1,[420,10,980,85]],["KIN","The Stand",1,[420,90,980,170]]]`;
       }
 
@@ -1168,8 +1169,11 @@ Example: [["BLACK, Cara","Murder in Clichy",1,[420,10,980,85]],["KING, Stephen",
         cmp = a.val.localeCompare(b.val, undefined, { sensitivity: 'base' });
       } else {
         const A = a.val, B = b.val;
-        const an = A.num === null ? -Infinity : A.num;
-        const bn = B.num === null ? -Infinity : B.num;
+        // Truncate to 2 decimal places so that e.g. 635.04 and 635.048 compare
+        // equal and are sorted by cutter only — matching how public libraries
+        // shelve nearby sub-numbers together rather than strictly numerically.
+        const trunc = n => n === null ? -Infinity : Math.floor(n * 100) / 100;
+        const an = trunc(A.num), bn = trunc(B.num);
         cmp = an !== bn ? an - bn : A.cut.localeCompare(B.cut, undefined, { sensitivity: 'base' });
       }
       if (cmp !== 0) return cmp;
