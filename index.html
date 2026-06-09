@@ -682,11 +682,16 @@
     const cameraWrap       = document.getElementById('cameraWrap');
     const photoArea        = document.getElementById('photoArea');
     // Section toggle — remembers the last-used section across reloads.
+    // If results are on screen, switching tabs re-checks the same photo with the
+    // other section's ordering rules (local only — no new API call needed).
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         try { localStorage.setItem('shelfcheck.section', btn.dataset.section); } catch {}
+        if (lastRawBooks && document.getElementById('resultsOverlay')) {
+          showResults(lastRawBooks, btn.dataset.section);
+        }
       });
     });
 
@@ -727,6 +732,7 @@
       analyzeBtn.textContent = 'Analyze';
       photoInput.value       = '';
       uploadInput.value      = '';
+      document.getElementById('errorBanner')?.remove();
     }
 
     takePicBtn.addEventListener('click', () => photoInput.click());
@@ -784,7 +790,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
         spine_label:   arr[0] ?? null,
         call_number:   null,
         series_volume: null,
-        confidence:    arr[2] === 1 ? 'high' : 'low',
+        confidence:    Number(arr[2]) === 1 ? 'high' : 'low',   // tolerate "1" as a string
         bounding_box:  box,
       };
     }
@@ -841,16 +847,24 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       overlay.innerHTML = `
         <div class="loading-text">
           READING SPINES…<br>
-          <span class="loading-subtext">(this takes around 20 seconds)</span>
+          <span class="loading-subtext" id="loadingSubtext">(this takes around 20 seconds)</span>
         </div>`;
       photoArea.appendChild(overlay);
     }
 
-    function hideLoading(success = true) {
+    function setLoadingSubtext(text) {
+      const el = document.getElementById('loadingSubtext');
+      if (el) el.textContent = text;
+    }
+
+    function hideLoading() {
       document.getElementById('loadingOverlay')?.remove();
     }
 
     // Call Gemini (single model, no fallback). Resolves to books array.
+    // Thrown errors carry .status (HTTP code) and .noRetry (retrying can't help).
+    const GEMINI_TIMEOUT_MS = 75000;
+
     async function callGemini(prompt, image) {
       const parts = [
         { text: prompt },
@@ -863,6 +877,8 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
         res = await fetch(GEMINI_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          // Don't hang forever if the proxy or model stalls.
+          signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(GEMINI_TIMEOUT_MS) : undefined,
           body: JSON.stringify({
             model: GEMINI_MODEL,
             generationConfig: {
@@ -874,28 +890,64 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
             contents: [{ parts }],
           })
         });
-      } catch (networkErr) {
+      } finally {
         console.timeEnd('gemini');
-        throw networkErr;
       }
-      console.timeEnd('gemini');
 
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        throw new Error(`${res.status}: ${errText.slice(0, 200)}`);
+        const err = new Error(`${res.status}: ${errText.slice(0, 200)}`);
+        err.status = res.status;
+        throw err;
       }
 
-      const json  = await res.json();
-      const raw   = json.candidates[0].content.parts[0].text;
-      // With response_mime_type: 'application/json', we don't need markdown regex cleanup
-      return JSON.parse(raw)
-        .map(expandBook)
-        .filter(b => {
-          if (!b.bounding_box) return true;
-          const [ymin, xmin, ymax, xmax] = b.bounding_box;
-          // Ignore books that are cut off by touching the absolute edge of the image frame
-          return xmin > 5 && xmax < 995 && ymin > 5 && ymax < 995;
-        });
+      const json = await res.json();
+      const cand = json.candidates?.[0];
+      if (!cand) {
+        const block = json.promptFeedback?.blockReason;
+        const err = new Error(block ? `request was blocked (${block})` : 'the model returned an empty response');
+        err.noRetry = !!block;
+        throw err;
+      }
+      if (cand.finishReason === 'MAX_TOKENS') {
+        const err = new Error('the shelf list was too long for one response — try photographing fewer shelves at once');
+        err.noRetry = true;   // temperature 0: the same image will truncate again
+        throw err;
+      }
+
+      const raw = (cand.content?.parts || []).map(p => p.text || '').join('');
+      if (!raw) throw new Error('the model returned no text');
+
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw new Error('could not understand the model output');
+      }
+      if (!Array.isArray(parsed)) throw new Error('unexpected model output format');
+
+      // Books touching the photo edge likely have a partially cropped sticker.
+      // Keep them — silently dropping them miscounts the shelf and can hide a real
+      // misorder — but tag them so the order check treats them as unverifiable
+      // (yellow). Top-edge crops are fine: the sticker sits at the BOTTOM of the spine.
+      return parsed.map(expandBook).map(b => {
+        if (!b.bounding_box) return b;
+        const [, xmin, ymax, xmax] = b.bounding_box;
+        const cropped = xmin <= 5 || xmax >= 995 || ymax >= 995;
+        return cropped ? { ...b, _edgeCropped: true } : b;
+      });
+    }
+
+    // Map a raw error to a message a volunteer can act on.
+    function friendlyErrorMessage(err) {
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        return 'The analysis took too long. Try again, or retake with fewer shelves in frame.';
+      }
+      if (!navigator.onLine || /Failed to fetch|NetworkError/i.test(err.message)) {
+        return "Couldn't reach the server. Check your connection.";
+      }
+      if (err.status === 429) return 'The service is busy right now — wait a moment and retry.';
+      return `Analysis failed: ${err.message}`;
     }
 
     async function analyzeShelf() {
@@ -908,38 +960,42 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       const procTime = Math.round(performance.now() - tPrep0);
       const section = getSection();
       const prompt  = buildPrompt(section);
-      let success = false;
       const maxAttempts = 2;
+      let books = null, apiTime = 0;
 
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         if (attempt > 1) {
-          analyzeBtn.textContent = `Retrying (Attempt ${attempt})…`;
+          // The analyze button is hidden under the loading overlay — surface the
+          // retry status where the volunteer is actually looking.
+          setLoadingSubtext(`retrying (attempt ${attempt})…`);
         }
         try {
           const tApi0 = performance.now();
-          const books = await callGemini(prompt, image);
-          const apiTime = Math.round(performance.now() - tApi0);
-
-          success = true;
-          showResults(books, section);
-          if (debugMode) showTimingBadge(procTime, apiTime, GEMINI_MODEL);
+          books = await callGemini(prompt, image);
+          apiTime = Math.round(performance.now() - tApi0);
           break; // success, exit the retry loop
         } catch (err) {
           console.warn(`Attempt ${attempt} failed:`, err);
-          if (attempt === maxAttempts || !navigator.onLine) {
-            const offline = !navigator.onLine || /Failed to fetch|NetworkError/i.test(err.message);
-            showErrorBanner(
-              offline ? "Couldn't reach the server. Check your connection." : `Analysis failed: ${err.message}`,
-              () => analyzeShelf()
-            );
+          // Don't retry what can't succeed: blocked/truncated responses (.noRetry),
+          // client errors other than 429, or being offline.
+          const retryable = !err.noRetry &&
+                            !(err.status >= 400 && err.status < 500 && err.status !== 429) &&
+                            navigator.onLine;
+          if (attempt === maxAttempts || !retryable) {
+            hideLoading();
+            showErrorBanner(friendlyErrorMessage(err), () => analyzeShelf());
             analyzeBtn.disabled    = false;
             analyzeBtn.textContent = 'Analyze';
-            break;
+            return;
           }
-          // otherwise loop continues to retry
+          await new Promise(r => setTimeout(r, 800));   // brief backoff before retrying
         }
       }
-      hideLoading(success);
+
+      hideLoading();
+      // Render outside the retry loop — a rendering bug shouldn't trigger a re-call.
+      showResults(books, section);
+      if (debugMode) showTimingBadge(procTime, apiTime, GEMINI_MODEL);
     }
 
     // On-screen timing readout for Debug Mode: prep (CPU image pipeline) vs model
@@ -973,8 +1029,8 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
         banner.remove();
         onRetry();
       };
-      // Auto-dismiss after 8s if ignored
-      setTimeout(() => banner.remove(), 8000);
+      // Stays until the volunteer acts — auto-dismissing took the Retry button
+      // away mid-read. Retaking or starting a new scan clears it.
     }
 
     // ── Ordering logic ────────────────────────────────────
@@ -1104,17 +1160,6 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       return null;
     }
 
-    // For an author-style spine label like "BLACK, Cara, Leduc 5" the normalized
-    // primary key is just the author cutter — we drop the series name + volume so
-    // that all books by the same author tie at the primary level. The volume is
-    // returned separately as the secondary key.
-    function normalizeLabelToAuthor(s) {
-      if (!s) return null;
-      const noVol = String(s).replace(/\s*\d+\s*$/, '');     // strip trailing volume
-      const noSeries = noVol.replace(/,\s*[^,]+$/, '');       // strip trailing series name after second comma
-      return normalizeAuthor(noSeries);
-    }
-
     // ── Cross-field consistency check ──
     // When both spine_label and author_last are present, validate that the surname
     // from the label matches the standalone author_last field. If they disagree,
@@ -1149,6 +1194,9 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
     // String keys carry surname (val), first name (first), and series volume (vol).
     // Comparison is surname → first name → volume (and a title fallback).
     function sortKey(book, section) {
+      // Spine cut off by the photo edge — the sticker read can't be trusted,
+      // so never use it to flag a misorder. Rendered yellow ("check by hand").
+      if (book._edgeCropped) return null;
       const lowConfNoLabel = book.confidence === 'low' && !book.spine_label;
       const vol = extractVolume(book);
       const title = lettersLower((book.title || '').replace(/^the\s+|^a\s+|^an\s+/i, ''));
@@ -1172,7 +1220,14 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
         return d ? { kind: 'dewey', val: d, vol, title } : null;
       }
 
-      // unknown section → treat as fiction
+      // Unknown section ("auto") — infer from the label itself:
+      // numeric prefix → Dewey key, otherwise author-style, then author_last.
+      const d = parseDewey(book.spine_label) || parseDewey(book.call_number);
+      if (d && d.num !== null) return { kind: 'dewey', val: d, vol, title };
+      if (book.spine_label) {
+        const k = strKeyFromAuthorish(book.spine_label);
+        if (k) return k;
+      }
       return strKeyFromAuthorish(book.author_last);
     }
 
@@ -1365,6 +1420,43 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
     // Check order for a single shelf of books (already sorted left→right within the shelf).
     function checkOrderOneShelf(books, section) {
       const keys = books.map(b => sortKey(b, section));
+
+      // Pre-pass: a key wedged between two neighbors that share the same primary
+      // value (surname / Dewey) while differing wildly itself is almost certainly
+      // an OCR misread. Demote it before the LIS runs — otherwise the LIS
+      // tie-break can blame an innocent neighbor (e.g. BLACK, ZULU, BLACK at the
+      // end of a shelf used to flag the second BLACK instead of ZULU).
+      function samePrimary(a, b) {
+        if (a.kind !== b.kind) return false;
+        if (a.kind === 'str') return a.val === b.val && (a.first || '') === (b.first || '');
+        return a.val.num === b.val.num && a.val.cut === b.val.cut;
+      }
+      function primaryStr(k) {
+        return k.kind === 'str' ? (k.val || '') : String(k.val.num ?? '');
+      }
+      const misreads = [];
+      for (let i = 0; i < keys.length; i++) {
+        if (keys[i] === null) continue;
+        let L = i - 1;
+        while (L >= 0 && keys[L] === null) L--;
+        let R = i + 1;
+        while (R < keys.length && keys[R] === null) R++;
+        if (L < 0 || R >= keys.length) continue;
+        const kL = keys[L], kR = keys[R], kM = keys[i];
+        // Rule A: neighbors share a primary value, the middle book doesn't.
+        if (samePrimary(kL, kR) && !samePrimary(kM, kL)) { misreads.push(i); continue; }
+        // Rule B: neighbors start with the same letter, middle is far from both
+        // (first letter ≥3 alphabet positions away) — an extreme outlier.
+        const vL = primaryStr(kL), vR = primaryStr(kR), vM = primaryStr(kM);
+        if (vL && vR && vM &&
+            vL.charAt(0) === vR.charAt(0) &&
+            Math.abs(vM.charCodeAt(0) - vL.charCodeAt(0)) >= 3 &&
+            Math.abs(vM.charCodeAt(0) - vR.charCodeAt(0)) >= 3) {
+          misreads.push(i);
+        }
+      }
+      for (const i of misreads) keys[i] = null;   // → rendered unverifiable (yellow)
+
       const verifiableIdx = [];
       keys.forEach((k, i) => { if (k !== null) verifiableIdx.push(i); });
 
@@ -1557,12 +1649,34 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
 
     // ── Results: draw boxes + a summary badge ───────────────
     let lastCheckedBooks = [];
+    let lastRawBooks     = null;   // raw Gemini output — lets a tab switch re-check without a new API call
+
+    // Fiction labels never start with digits; Dewey labels do. If most labels are
+    // numeric while Fiction is selected, the volunteer is almost certainly on the
+    // wrong tab and every flag is garbage. (Only this direction is unambiguous —
+    // nonfiction shelves can legitimately have letter-only cutters like "KIN".)
+    function detectSectionMismatch(books, section) {
+      if (section !== 'fiction') return null;
+      const labels = books.map(b => b.spine_label).filter(Boolean);
+      if (labels.length < 3) return null;
+      const deweyish = labels.filter(l => /^\s*\d{1,3}(\.\d+)?(\s|$)/.test(String(l))).length;
+      return deweyish / labels.length > 0.6 ? 'nonfiction' : null;
+    }
+
+    function setActiveTab(section) {
+      document.querySelectorAll('.tab-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.section === section));
+      try { localStorage.setItem('shelfcheck.section', section); } catch {}
+    }
 
     function showResults(books, section) {
       const checked = checkOrder(books, section);
       lastCheckedBooks = checked;
+      lastRawBooks     = books;
 
       document.getElementById('resultsOverlay')?.remove();
+      document.getElementById('sectionHint')?.remove();
+      document.getElementById('bookInspect')?.remove();
 
       const total    = checked.length;
       const outCount = checked.filter(b => b.outOfOrder).length;
@@ -1579,6 +1693,30 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       enableInspect();
       renderBoxes();
       showSummaryBadge(total, outCount, unvCount);
+
+      const suggest = detectSectionMismatch(books, section);
+      if (suggest) showSectionHint(suggest);
+    }
+
+    // Banner suggesting the other section — one tap re-checks the same photo locally.
+    function showSectionHint(suggest) {
+      const hint = document.createElement('div');
+      hint.id = 'sectionHint';
+      hint.className = 'error-banner';
+      hint.style.background = '#713f12';
+      hint.style.borderColor = '#a16207';
+      hint.style.bottom = '86px';   // sit above the results overlay
+      hint.innerHTML = `
+        <span class="error-banner-msg" style="color:#fde047">
+          These labels look like Dewey numbers — is this a ${suggest} shelf?</span>
+        <button class="error-banner-retry" style="background:#ca8a04" id="sectionHintBtn">
+          Re-check</button>`;
+      photoArea.appendChild(hint);
+      document.getElementById('sectionHintBtn').onclick = () => {
+        hint.remove();
+        setActiveTab(suggest);
+        showResults(lastRawBooks, suggest);
+      };
     }
 
     // Shown when Gemini detected zero books (blurry/dark/empty photo or a misfire).
@@ -1657,9 +1795,8 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       document.getElementById('bookInspect')?.remove();
       if (!best) return;
 
-      const confColor = best.confidence === 'high' ? '#4ade80' : best.confidence === 'medium' ? '#facc15' : '#f87171';
-
-      const status = best.unverifiable ? "⚠ Couldn't read this spine clearly — check it by hand."
+      const status = best._edgeCropped ? '⚠ Cut off at the photo edge — check it by hand, or retake with the whole spine in frame.'
+                   : best.unverifiable ? "⚠ Couldn't read this spine clearly — check it by hand."
                    : best.outOfOrder    ? '⚠ Out of order — this book is in the wrong spot.'
                    :                       '✓ In order';
 
@@ -1687,6 +1824,9 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       document.getElementById('bookBoxes')?.remove();
       document.getElementById('debugOverlay')?.remove();
       document.getElementById('bookInspect')?.remove();
+      document.getElementById('sectionHint')?.remove();
+      lastRawBooks = null;
+      lastCheckedBooks = [];
       disableInspect();
       retake();
     }
@@ -2087,6 +2227,35 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       assert(tiedResult.every(b => !b.outOfOrder), 'Tied books — none flagged out of order');
       console.groupEnd();
 
+      // ── Edge-cropped books ──
+      console.group('checkOrder (edge-cropped)');
+      const edgeBooks = [
+        { position: 1, spine_label: 'ADAMS', title: 'A', confidence: 'high', bounding_box: [100, 50, 900, 150] },
+        { position: 2, spine_label: 'ZULU',  title: 'Z', confidence: 'high', bounding_box: [100, 150, 900, 250], _edgeCropped: true },
+        { position: 3, spine_label: 'CLARK', title: 'C', confidence: 'high', bounding_box: [100, 250, 900, 350] },
+      ];
+      const edgeResult = checkOrder(edgeBooks, 'fiction');
+      assert(edgeResult[1].unverifiable === true, 'Edge-cropped book → unverifiable, not flagged');
+      assert(edgeResult[1].outOfOrder === false, 'Edge-cropped book never marked out of order');
+      assert(edgeResult.length === 3, 'Edge-cropped book still counted (not dropped)');
+      console.groupEnd();
+
+      // ── Section mismatch detection ──
+      console.group('detectSectionMismatch');
+      const deweyBooks = [
+        { spine_label: '973.7 HAR' }, { spine_label: '635.04 COL' }, { spine_label: '813 PAT' },
+      ];
+      eq(detectSectionMismatch(deweyBooks, 'fiction'), 'nonfiction',
+        'Dewey labels on Fiction tab → suggest nonfiction');
+      eq(detectSectionMismatch(deweyBooks, 'nonfiction'), null,
+        'Dewey labels on Nonfiction tab → no suggestion');
+      const fictionBooks = [
+        { spine_label: 'BLACK, Cara' }, { spine_label: 'KING, Stephen' }, { spine_label: 'PATTERSON' },
+      ];
+      eq(detectSectionMismatch(fictionBooks, 'fiction'), null,
+        'Author labels on Fiction tab → no suggestion');
+      console.groupEnd();
+
       console.log(`\n=== Tests complete: ${pass} passed, ${fail} failed ===`);
       return { pass, fail };
     }
@@ -2104,7 +2273,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
           <h3>How ShelfCheck works</h3>
           <div class="first-hint-row">
             <span class="first-hint-dot" style="background:#3b82f6"></span>
-            <span>Point at a shelf and tap the shutter. Pinch in for detail, or out for a wider view.</span>
+            <span>Take a straight-on photo of one or two shelves. Get close enough that the white labels are readable, with whole spines in frame.</span>
           </div>
           <div class="first-hint-row">
             <span class="first-hint-dot" style="background:#ef4444"></span>
