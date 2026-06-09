@@ -175,26 +175,14 @@
       font-size: 14px;
       font-weight: 600;
       letter-spacing: 0.06em;
+      text-align: center;
+      line-height: 1.6;
     }
-    .loading-bar {
-      width: 100%;
-      max-width: 260px;
-      height: 6px;
-      background: rgba(255, 255, 255, 0.15);
-      border-radius: 999px;
-      overflow: hidden;
-    }
-    .loading-bar-fill {
-      width: 0%;
-      height: 100%;
-      background: #2563eb;
-      border-radius: 999px;
-      transition: width 0.12s linear;
-    }
-    .loading-pct {
-      color: rgba(255, 255, 255, 0.7);
+    .loading-subtext {
       font-size: 12px;
-      font-variant-numeric: tabular-nums;
+      font-weight: 400;
+      opacity: 0.8;
+      text-transform: lowercase;
     }
 
     /* Results overlay */
@@ -931,47 +919,20 @@ Example: [{"a":"BLACK","t":"Murder in Clichy","l":"BLACK, Cara 5","v":5,"c":1,"b
       return out.toDataURL('image/jpeg', quality).split(',')[1];
     }
 
-    let loadingTimer = null;
-
     function showLoading() {
       const overlay = document.createElement('div');
       overlay.id        = 'loadingOverlay';
       overlay.className = 'loading-overlay';
       overlay.innerHTML = `
-        <div class="loading-text">READING SPINES…</div>
-        <div class="loading-bar"><div class="loading-bar-fill" id="loadingBarFill"></div></div>
-        <div class="loading-pct" id="loadingPct">0%</div>`;
+        <div class="loading-text">
+          READING SPINES…<br>
+          <span class="loading-subtext">(this takes around 20 seconds)</span>
+        </div>`;
       photoArea.appendChild(overlay);
-
-      // Simulate progress: ease toward 85% over ~3s, then crawl toward 95%
-      const fill = document.getElementById('loadingBarFill');
-      const pct  = document.getElementById('loadingPct');
-      const start = performance.now();
-      const EASE_DURATION = 3000;  // reach 85% in 3s (flash-lite is fast)
-      loadingTimer = setInterval(() => {
-        const t = (performance.now() - start) / EASE_DURATION;
-        let p;
-        if (t < 1) {
-          p = 85 * (1 - Math.pow(1 - t, 2));  // ease-out to 85
-        } else {
-          p = Math.min(95, 85 + (t - 1) * 2);  // crawl 85→95
-        }
-        fill.style.width = p + '%';
-        pct.textContent  = Math.round(p) + '%';
-      }, 100);
     }
 
     function hideLoading(success = true) {
-      clearInterval(loadingTimer);
-      const fill = document.getElementById('loadingBarFill');
-      const pct  = document.getElementById('loadingPct');
-      if (fill && success) {
-        fill.style.width = '100%';
-        if (pct) pct.textContent = '100%';
-        setTimeout(() => document.getElementById('loadingOverlay')?.remove(), 200);
-      } else {
-        document.getElementById('loadingOverlay')?.remove();
-      }
+      document.getElementById('loadingOverlay')?.remove();
     }
 
     // Call Gemini (single model, no fallback). Resolves to books array.
