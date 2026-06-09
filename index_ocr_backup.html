@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>ShelfCheck</title>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.3/dist/ort.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { height: 100%; }
+    body {
+      min-height: 100vh; min-height: 100dvh;
+      background: #08090e;
+      color: #e0e2f0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      display: flex; flex-direction: column;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ── Header ─────────────────────────────────────────── */
+    .header {
+      flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 20px;
+      padding-top: max(14px, env(safe-area-inset-top));
+      background: rgba(9, 10, 18, 0.96);
+      backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid #181a28;
+      position: sticky; top: 0; z-index: 10;
+    }
+    .logo { font-size: 19px; font-weight: 800; letter-spacing: -0.4px; line-height: 1; }
+    .logo span { color: #4f8eff; }
+    .logo sub { font-size: 10px; font-weight: 500; color: #42465c; letter-spacing: 0; vertical-align: baseline; margin-left: 6px; }
+    .engine-pill {
+      font-size: 11px; font-weight: 600; padding: 4px 11px; border-radius: 99px;
+      background: #13141f; border: 1px solid #21243a; color: #42465c;
+      transition: all .3s;
+    }
+    .engine-pill.server { background: #09213f; border-color: #1e4fa0; color: #5b9bff; }
+    .engine-pill.device { background: #1c1500; border-color: #4a3500; color: #e8a020; }
+
+    /* ── Layout ─────────────────────────────────────────── */
+    main {
+      flex: 1; display: flex; flex-direction: column; gap: 14px;
+      padding: 18px 14px;
+      padding-bottom: max(36px, env(safe-area-inset-bottom));
+      max-width: 540px; width: 100%; margin: 0 auto;
+    }
+
+    /* ── Cards ──────────────────────────────────────────── */
+    .card {
+      background: #0f1019;
+      border: 1px solid #191b2a;
+      border-radius: 18px;
+      overflow: hidden;
+    }
+    .card-pad { padding: 16px 18px; }
+    .section-label {
+      font-size: 10px; font-weight: 700; letter-spacing: 1px;
+      text-transform: uppercase; color: #383b52; margin-bottom: 13px;
+    }
+
+    /* ── Mode toggle ─────────────────────────────────────── */
+    .seg { display: flex; gap: 8px; }
+    .seg-btn {
+      flex: 1; padding: 15px 12px; border-radius: 13px;
+      border: 1.5px solid #191b2a; background: #0b0c15;
+      color: #565972; font-size: 15px; font-weight: 600;
+      cursor: pointer; text-align: center; transition: all .18s;
+    }
+    .seg-btn:hover { border-color: #252843; color: #8e93b8; }
+    .seg-btn.active { background: #0a1e42; border-color: #2255a8; color: #fff; }
+    .seg-btn small {
+      display: block; margin-top: 3px;
+      font-size: 11px; font-weight: 500; opacity: .65;
+    }
+
+    /* ── Capture ─────────────────────────────────────────── */
+    .cam-stage {
+      position: relative; width: 100%; background: #060710;
+      min-height: 170px; display: flex; align-items: center; justify-content: center;
+    }
+    .cam-stage video, .cam-stage canvas, .cam-stage img { width: 100%; display: block; }
+    .cam-placeholder {
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
+      padding: 48px 24px; color: #32364a; font-size: 13px;
+    }
+    .cam-placeholder svg { opacity: .35; }
+    .frame-guide {
+      position: absolute; inset: 8% 5%;
+      border: 2px dashed rgba(255,255,255,.25); border-radius: 10px; pointer-events: none;
+    }
+    .frame-guide::after {
+      content: "Align shelf straight-on, fill the frame";
+      position: absolute; bottom: -26px; left: 50%; transform: translateX(-50%);
+      font-size: 11px; color: rgba(255,255,255,.4); white-space: nowrap;
+    }
+    .cap-btns { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+    .cap-btns-row { display: flex; gap: 10px; }
+
+    /* ── Buttons ─────────────────────────────────────────── */
+    .btn {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      width: 100%; padding: 15px 18px; border-radius: 13px; border: none;
+      font-size: 15px; font-weight: 700; cursor: pointer;
+      transition: transform .1s, opacity .15s, filter .15s;
+    }
+    .btn:active { transform: scale(0.97); filter: brightness(1.1); }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-primary { background: #4f8eff; color: #fff; }
+    .btn-secondary { background: #12131f; color: #b0b4d4; border: 1.5px solid #21243a; }
+    .btn-ghost { background: transparent; color: #565972; border: 1.5px solid #191b2a; font-size: 14px; }
+
+    /* ── Processing ──────────────────────────────────────── */
+    .proc-thumb {
+      width: 100%; max-height: 190px; overflow: hidden;
+      background: #060710; display: flex; align-items: center;
+    }
+    .proc-thumb img { width: 100%; object-fit: cover; display: block; opacity: .75; }
+
+    .proc-body { padding: 20px 18px; }
+    .proc-headline {
+      font-size: 16px; font-weight: 700; color: #c8ccec; margin-bottom: 18px;
+    }
+
+    .proc-steps { display: flex; flex-direction: column; gap: 14px; margin-bottom: 20px; }
+    .proc-step { display: flex; align-items: center; gap: 13px; }
+    .step-dot {
+      width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      border: 1.5px solid #21243a; background: #0b0c15; font-size: 10px;
+      transition: all .3s;
+    }
+    .proc-step.done .step-dot { background: #0c2218; border-color: #22c55e; color: #22c55e; }
+    .proc-step.active .step-dot {
+      background: #0a1e42; border-color: #4f8eff; color: #4f8eff;
+      animation: pulse-step 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse-step {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(79,142,255,.5); }
+      60% { box-shadow: 0 0 0 7px rgba(79,142,255,0); }
+    }
+    .step-label { font-size: 14px; color: #32364a; transition: color .3s; }
+    .proc-step.done .step-label { color: #4a4e65; }
+    .proc-step.active .step-label { color: #c8ccec; font-weight: 600; }
+
+    .prog-track { height: 5px; background: #191b2a; border-radius: 99px; overflow: hidden; margin-bottom: 12px; }
+    .prog-fill {
+      height: 100%; width: 0%; border-radius: 99px;
+      background: linear-gradient(90deg, #3575f0, #6fa4ff);
+      transition: width .5s cubic-bezier(.4,0,.2,1);
+    }
+    .proc-eta { font-size: 12px; color: #383b52; text-align: center; }
+
+    /* ── Results ─────────────────────────────────────────── */
+    .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 16px 16px 0; }
+    .stat-cell {
+      padding: 14px 8px; border-radius: 13px; text-align: center;
+      background: #0b0c15; border: 1px solid #191b2a;
+    }
+    .stat-cell .n { font-size: 30px; font-weight: 800; line-height: 1; }
+    .stat-cell .l { font-size: 10px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; color: #383b52; margin-top: 5px; }
+    .stat-cell.total .n { color: #b0b4d4; }
+    .stat-cell.ok .n { color: #22c55e; }
+    .stat-cell.bad .n { color: #ef4444; }
+
+    .overlay-wrap { padding: 14px; }
+    .overlay-wrap canvas { width: 100%; border-radius: 10px; display: block; }
+
+    .result-list { display: flex; flex-direction: column; }
+    .result-item {
+      display: flex; align-items: flex-start; gap: 12px;
+      padding: 13px 18px;
+    }
+    .result-item:not(:last-child) { border-bottom: 1px solid #13141f; }
+    .result-item.ri-bad  { background: rgba(239,68,68,.05); }
+    .result-item.ri-warn { background: rgba(245,158,11,.05); }
+
+    .ri-num {
+      width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 700;
+      background: #191b2a; color: #4a4e65; margin-top: 1px;
+    }
+    .result-item.ri-bad .ri-num  { background: #250e0e; color: #f87171; }
+    .result-item.ri-warn .ri-num { background: #211600; color: #fbbf24; }
+    .result-item.ri-ok .ri-num   { background: #0c2218; color: #4ade80; }
+
+    .ri-body { flex: 1; min-width: 0; }
+    .ri-text { font-size: 14px; color: #9094b8; line-height: 1.45; word-break: break-word; }
+    .ri-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+    .tag {
+      font-size: 10px; font-weight: 700; letter-spacing: .3px;
+      padding: 2px 8px; border-radius: 99px;
+    }
+    .tag-bad    { background: #2d1010; color: #f87171; }
+    .tag-warn   { background: #211600; color: #fbbf24; }
+    .tag-ok     { background: #0c2218; color: #4ade80; }
+    .tag-cat    { background: #0c2218; color: #4ade80; border: 1px solid #22c55e; }
+
+    .ri-conf { font-size: 11px; font-weight: 600; color: #32364a; flex-shrink: 0; margin-top: 6px; }
+    .ri-conf.low { color: #e8a020; }
+
+    .retake-wrap { padding: 14px; }
+
+    /* ── Error ───────────────────────────────────────────── */
+    .err-body { padding: 16px 18px; }
+    .err-msg {
+      background: #1a0a0a; border: 1px solid #3d1212; border-radius: 10px;
+      padding: 14px; color: #fca5a5; font-size: 13px; line-height: 1.6; white-space: pre-wrap;
+    }
+
+    /* ── Debug ───────────────────────────────────────────── */
+    .dbg-wrap { padding: 4px 16px 16px; }
+    details summary { font-size: 12px; color: #32364a; cursor: pointer; padding: 8px 0; }
+    pre { margin-top: 8px; background: #060710; border: 1px solid #191b2a; border-radius: 10px; padding: 12px; font-size: 11px; overflow: auto; max-height: 220px; color: #4f8eff; }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <div class="logo">Shelf<span>Check</span><sub>Champaign Public Library</sub></div>
+  <div class="engine-pill" id="engineBadge">idle</div>
+</header>
+
+<main>
+
+  <!-- 1 · Section type -->
+  <div class="card" id="setupCard">
+    <div class="card-pad">
+      <div class="section-label">Section type</div>
+      <div class="seg">
+        <button class="seg-btn active" id="segFiction" data-mode="fiction">
+          Fiction
+          <small>by author surname</small>
+        </button>
+        <button class="seg-btn" id="segNonfiction" data-mode="nonfiction">
+          Nonfiction
+          <small>by Dewey number</small>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2 · Capture -->
+  <div class="card" id="inputCard">
+    <div class="cam-stage" id="cameraStage">
+      <video id="video" playsinline muted autoplay class="hidden"></video>
+      <div class="frame-guide hidden" id="frameGuide"></div>
+      <img id="placeholder" alt="" class="hidden">
+      <div class="cam-placeholder" id="capturePlaceholder">
+        <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+          <circle cx="12" cy="13" r="4"/>
+        </svg>
+        Photograph one shelf straight-on
+      </div>
+    </div>
+    <div class="cap-btns" id="captureControls">
+      <button class="btn btn-primary" id="startCamBtn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M2 12a9.9 9.9 0 0 1 2.3-6.3M21.7 5.7A9.9 9.9 0 0 1 22 12"/><path d="M12 2a9.9 9.9 0 0 1 7.7 3.7M4.3 20.3A9.9 9.9 0 0 1 12 22"/></svg>
+        Use Camera
+      </button>
+      <div class="cap-btns-row">
+        <button class="btn btn-secondary" id="uploadBtn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Upload Photo
+        </button>
+      </div>
+    </div>
+    <div class="cap-btns hidden" id="snapWrap">
+      <button class="btn btn-primary" id="snapBtn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+        Capture Shelf
+      </button>
+    </div>
+    <input type="file" id="fileInput" accept="image/*" class="hidden">
+  </div>
+
+  <!-- 3 · Processing -->
+  <div class="card hidden" id="processCard">
+    <div class="proc-thumb" id="procThumb"></div>
+    <div class="proc-body">
+      <div class="proc-headline">Reading your shelf…</div>
+      <div class="proc-steps">
+        <div class="proc-step" id="procStep0">
+          <div class="step-dot"></div>
+          <div class="step-label">Uploading photo</div>
+        </div>
+        <div class="proc-step" id="procStep1">
+          <div class="step-dot"></div>
+          <div class="step-label">Reading spine labels</div>
+        </div>
+        <div class="proc-step" id="procStep2">
+          <div class="step-dot"></div>
+          <div class="step-label">Checking order</div>
+        </div>
+        <div class="proc-step" id="procStep3">
+          <div class="step-dot"></div>
+          <div class="step-label">Verifying with catalogue</div>
+        </div>
+      </div>
+      <div class="prog-track"><div class="prog-fill" id="progressBar"></div></div>
+      <div class="proc-eta" id="processMsg">About 20 seconds — keep this page open</div>
+    </div>
+  </div>
+
+  <!-- 4 · Results -->
+  <div class="card hidden" id="resultsCard">
+    <div class="stats-row">
+      <div class="stat-cell total"><div class="n" id="statTotal">0</div><div class="l">scanned</div></div>
+      <div class="stat-cell ok"><div class="n" id="statOk">0</div><div class="l">in order</div></div>
+      <div class="stat-cell bad"><div class="n" id="statBad">0</div><div class="l">issues</div></div>
+    </div>
+    <div class="overlay-wrap"><canvas id="overlay"></canvas></div>
+    <div class="result-list" id="resultList"></div>
+    <div class="retake-wrap">
+      <button class="btn btn-ghost" id="retakeBtn">↩ Scan Another Shelf</button>
+    </div>
+  </div>
+
+  <!-- Error -->
+  <div class="card hidden" id="errorCard">
+    <div class="err-body">
+      <div class="section-label">Something went wrong</div>
+      <div class="err-msg" id="errorMsg"></div>
+    </div>
+  </div>
+
+  <!-- Debug -->
+  <div class="card">
+    <div class="dbg-wrap">
+      <details id="debugBox">
+        <summary>Debug — raw OCR output</summary>
+        <pre id="rawDump">No scan yet.</pre>
+      </details>
+    </div>
+  </div>
+
+</main>
+
+<script type="module">
+  // ─────────────────────────────────────────────────────────────
+  // ShelfCheck — library shelf-order checker using OCR
+  // Primary: RapidOCR backend on Hugging Face Spaces
+  // Fallback: PaddleOCR PP-OCRv3 on onnxruntime-web (in-browser)
+  // ─────────────────────────────────────────────────────────────
+
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    engineBadge:       $('engineBadge'),
+    segFiction:        $('segFiction'),
+    segNonfiction:     $('segNonfiction'),
+    cameraStage:       $('cameraStage'),
+    video:             $('video'),
+    frameGuide:        $('frameGuide'),
+    capturePlaceholder:$('capturePlaceholder'),
+    startCamBtn:       $('startCamBtn'),
+    uploadBtn:         $('uploadBtn'),
+    captureControls:   $('captureControls'),
+    snapBtn:           $('snapBtn'),
+    snapWrap:          $('snapWrap'),
+    fileInput:         $('fileInput'),
+    inputCard:         $('inputCard'),
+    processCard:       $('processCard'),
+    processMsg:        $('processMsg'),
+    progressBar:       $('progressBar'),
+    procThumb:         $('procThumb'),
+    resultsCard:       $('resultsCard'),
+    overlay:           $('overlay'),
+    resultList:        $('resultList'),
+    statTotal:         $('statTotal'),
+    statOk:            $('statOk'),
+    statBad:           $('statBad'),
+    retakeBtn:         $('retakeBtn'),
+    errorCard:         $('errorCard'),
+    errorMsg:          $('errorMsg'),
+    rawDump:           $('rawDump'),
+  };
+
+  let mode = 'fiction';
+  let ocr = null;
+  let stream = null;
+
+  // ── Section toggle ───────────────────────────────────────────
+  els.segFiction.onclick   = () => setMode('fiction');
+  els.segNonfiction.onclick = () => setMode('nonfiction');
+  function setMode(m) {
+    mode = m;
+    els.segFiction.classList.toggle('active', m === 'fiction');
+    els.segNonfiction.classList.toggle('active', m === 'nonfiction');
+  }
+
+  // ── Camera ───────────────────────────────────────────────────
+  els.startCamBtn.onclick = async () => {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false,
+      });
+      els.video.srcObject = stream;
+      els.video.classList.remove('hidden');
+      els.frameGuide.classList.remove('hidden');
+      hide(els.captureControls);
+      hide(els.capturePlaceholder);
+      show(els.snapWrap);
+    } catch (e) {
+      showError('Could not open the camera.\n' + e.message + '\n\nTip: camera requires HTTPS. You can still use "Upload Photo".');
+    }
+  };
+
+  els.snapBtn.onclick = () => {
+    const v = els.video;
+    const c = document.createElement('canvas');
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext('2d').drawImage(v, 0, 0);
+    stopCamera();
+    runPipeline(c);
+  };
+
+  function stopCamera() {
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    els.video.classList.add('hidden');
+    els.frameGuide.classList.add('hidden');
+  }
+
+  // ── Upload ───────────────────────────────────────────────────
+  els.uploadBtn.onclick = () => els.fileInput.click();
+  els.fileInput.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const img = new Image();
+    img.src = URL.createObjectURL(file);
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth; c.height = img.naturalHeight;
+    c.getContext('2d').drawImage(img, 0, 0);
+    runPipeline(c);
+  };
+
+  // ── OCR backend ──────────────────────────────────────────────
+  // Deployed on Hugging Face Spaces — replace the URL below with
+  // your Space's public URL after deploying server/.
+  // To override locally: localStorage.setItem('shelfcheck_backend', 'http://127.0.0.1:8000')
+  const BACKEND_URL = localStorage.getItem('shelfcheck_backend') || 'https://krfish-shelfcheck-ocr.hf.space';
+  const BACKEND_TIMEOUT = 45000;
+
+  async function ocrViaBackend(canvas) {
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.85));
+    const fd = new FormData();
+    fd.append('file', blob, 'shelf.jpg');
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), BACKEND_TIMEOUT);
+    try {
+      const resp = await fetch(BACKEND_URL + '/ocr', { method: 'POST', body: fd, signal: ctrl.signal });
+      if (!resp.ok) throw new Error('server returned ' + resp.status);
+      const data = await resp.json();
+      return data.regions || [];
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // ── On-device fallback ────────────────────────────────────────
+  let ppocr = null;
+  async function getOcr() {
+    if (ocr) return ocr;
+    setProcess('Loading on-device OCR (first time ~13 MB)…', 10);
+    ppocr = await import('./ppocr.js');
+    await ppocr.init({
+      detUrl: './models/det.onnx',
+      recUrl: './models/rec.onnx',
+      dictUrl: './models/ppocr_keys_v1.txt',
+      onStatus: (s) => setProcess(s, 35),
+    });
+    ocr = ppocr;
+    return ocr;
+  }
+
+  function fitCanvas(src, maxSide = 2048) {
+    const long = Math.max(src.width, src.height);
+    if (long <= maxSide) return src;
+    const s = maxSide / long;
+    const c = document.createElement('canvas');
+    c.width = Math.round(src.width * s);
+    c.height = Math.round(src.height * s);
+    c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+    return c;
+  }
+
+  // ── Progress crawl animation ──────────────────────────────────
+  let _crawlTimer = null;
+  function startCrawl(fromPct, toPct, durationMs) {
+    if (_crawlTimer) clearInterval(_crawlTimer);
+    const intervalMs = 120;
+    const steps = Math.ceil(durationMs / intervalMs);
+    let step = 0;
+    _crawlTimer = setInterval(() => {
+      step = Math.min(step + 1, steps);
+      const t = step / steps;
+      const eased = 1 - Math.pow(1 - t, 2.5);
+      els.progressBar.style.width = (fromPct + (toPct - fromPct) * eased) + '%';
+      if (step >= steps) { clearInterval(_crawlTimer); _crawlTimer = null; }
+    }, intervalMs);
+    return () => { if (_crawlTimer) { clearInterval(_crawlTimer); _crawlTimer = null; } };
+  }
+
+  function setStep(i) {
+    for (let j = 0; j < 4; j++) {
+      const el = $('procStep' + j);
+      if (!el) continue;
+      el.classList.remove('active', 'done');
+      if (j < i) el.classList.add('done');
+      if (j === i) el.classList.add('active');
+    }
+  }
+  function doneStep(i) {
+    const el = $('procStep' + i);
+    if (el) { el.classList.remove('active'); el.classList.add('done'); }
+  }
+
+  // ── Main pipeline ─────────────────────────────────────────────
+  async function runPipeline(canvas) {
+    // Show captured photo as thumbnail in processing screen
+    const thumbImg = document.createElement('img');
+    thumbImg.src = canvas.toDataURL('image/jpeg', 0.6);
+    els.procThumb.innerHTML = '';
+    els.procThumb.appendChild(thumbImg);
+
+    hide(els.inputCard); hide(els.resultsCard); hide(els.errorCard);
+    show(els.processCard);
+
+    // Reset steps and bar
+    for (let j = 0; j < 4; j++) {
+      const el = $('procStep' + j);
+      if (el) el.classList.remove('active', 'done');
+    }
+    els.progressBar.style.width = '0%';
+
+    try {
+      // Nonfiction Dewey stickers are small — needs higher resolution than fiction labels
+      const small = fitCanvas(canvas, mode === 'nonfiction' ? 1280 : 1024);
+      let raw;
+      try {
+        setStep(0); setProcess('Uploading photo…', 8);
+        // Give the bar a head start, then hand off to the crawl
+        await new Promise(r => setTimeout(r, 300));
+        const etaSec = mode === 'nonfiction' ? 45 : 20;
+        setStep(1); setProcess(`About ${etaSec} seconds — keep this page open`, null);
+        const stopCrawl = startCrawl(12, 78, (etaSec - 2) * 1000);
+        raw = await ocrViaBackend(small);
+        stopCrawl();
+        doneStep(0); doneStep(1);
+        els.engineBadge.textContent = 'server ⚡';
+        els.engineBadge.className = 'engine-pill server';
+      } catch (err) {
+        console.warn('[ShelfCheck] backend unavailable, falling back to on-device:', err);
+        setStep(1); setProcess('Server unavailable — using on-device OCR…', 15);
+        const engine = await getOcr();
+        raw = await engine.runOcr(small, (s) => setProcess(s, 60));
+        doneStep(0); doneStep(1);
+        els.engineBadge.textContent = 'on-device';
+        els.engineBadge.className = 'engine-pill device';
+      }
+
+      els.rawDump.textContent = safeStringify(raw.map(r => ({ text: r.text, score: +(r.score || 0).toFixed(2), quad: r.quad || r.box })));
+      console.log('[ShelfCheck] raw OCR result:', raw);
+
+      const lines = normalizeOcr(raw);
+      if (!lines.length) throw new Error('No readable text found. Try a sharper, straight-on photo.');
+
+      setStep(2); setProcess('Grouping books…', 85);
+      const books = groupBooks(lines, mode);
+      if (!books.length) throw new Error(
+        'Read ' + lines.length + ' text snippets but none looked like spine labels.\n' +
+        'Open the Debug panel to see what OCR detected.');
+
+      let checked = checkOrder(books, mode);
+      doneStep(2);
+
+      if (mode === 'fiction') {
+        setStep(3); setProcess('Verifying with catalogue…', 92);
+        checked = await canonicalizeAndRecheck(checked, mode);
+        doneStep(3);
+      }
+
+      setProcess('Done!', 100);
+      await new Promise(r => setTimeout(r, 280));
+      renderResults(small, checked);
+    } catch (e) {
+      console.error(e);
+      showError(e.message || String(e));
+    }
+  }
+
+  // ── Normalize OCR result ──────────────────────────────────────
+  function normalizeOcr(raw) {
+    return (raw || []).map(r => {
+      let quad = r.quad;
+      if (!quad && r.box) {
+        const b = r.box, x = num(b.x), y = num(b.y), w = num(b.w), h = num(b.h);
+        quad = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+      }
+      return { text: (r.text || '').trim(), score: num(r.score), quad };
+    }).filter(l => l.text && l.quad);
+  }
+
+  const num = (v) => (typeof v === 'number' ? v : parseFloat(v) || 0);
+
+  function bboxOf(quad) {
+    if (!quad) return null;
+    const xs = quad.map(p => p[0]), ys = quad.map(p => p[1]);
+    return { x: Math.min(...xs), y: Math.min(...ys),
+             w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys),
+             cx: (Math.min(...xs) + Math.max(...xs)) / 2,
+             cy: (Math.min(...ys) + Math.max(...ys)) / 2 };
+  }
+
+  // ── Per-book grouping ─────────────────────────────────────────
+  const clean    = (s) => (s || '').replace(/[^A-Za-z]/g, '').toUpperCase();
+  const keyStr   = (s) => (s || '').toUpperCase().replace(/[^A-Z ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const strcmp   = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  const STOP     = new Set(['THE', 'OF', 'AND', 'VON', 'VAN', 'DE', 'LA', 'DER', 'DEL', 'YON']);
+  const PREFIX   = new Set(['VON', 'VAN', 'DE', 'DER', 'DEL', 'LA', 'DU', 'YON']);
+  const normPrefix = (s) => { const c = clean(s); return c === 'YON' ? 'VON' : c; };
+
+  function isSurname(text) {
+    const t = text.trim().replace(/[.,]+$/, '');
+    const letters = t.replace(/[^A-Za-z]/g, '');
+    if (letters.length < 2) return false;
+    const upper = [...letters].filter(c => c === c.toUpperCase()).length / letters.length;
+    return upper >= 0.7;
+  }
+  const isFirstName = (t) => /^[A-Z][a-z]+\.?$/.test(t.trim());
+
+  function iou(a, b) {
+    const x0 = Math.max(a.x, b.x), y0 = Math.max(a.y, b.y);
+    const x1 = Math.min(a.x + a.w, b.x + b.w), y1 = Math.min(a.y + a.h, b.y + b.h);
+    const inter = Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
+    return inter ? inter / (a.w * a.h + b.w * b.h - inter) : 0;
+  }
+
+  function groupBooks(lines, mode) {
+    const regs = lines.map(l => ({ ...l, bb: bboxOf(l.quad) }))
+      .filter(l => l.bb && l.score >= 0.3);
+    if (!regs.length) return [];
+
+    const isLabel = mode === 'nonfiction'
+      ? (t) => /\d{1,3}(\.\d+)?/.test(t)
+      : (t) => isSurname(t) && !STOP.has(clean(t));
+
+    const isHorizontal = (bb) => bb.w >= bb.h * 0.9;
+    let anchors = regs.filter(l => isLabel(l.text) && isHorizontal(l.bb)
+      && (mode === 'nonfiction' || clean(l.text).length >= 4 || l.text.includes(',')));
+    if (!anchors.length) return [];
+
+    anchors.sort((a, b) => b.text.length - a.text.length || b.score - a.score);
+    const kept = [];
+    for (const a of anchors) if (!kept.some(k => iou(k.bb, a.bb) > 0.4)) kept.push(a);
+    anchors = kept;
+
+    const hs = anchors.map(a => a.bb.h).sort((x, y) => x - y);
+    const medH = hs[hs.length >> 1] || 20;
+    anchors.sort((a, b) => a.bb.cy - b.bb.cy);
+    const rows = [];
+    let row = [anchors[0]];
+    for (let i = 1; i < anchors.length; i++) {
+      if (Math.abs(anchors[i].bb.cy - row[row.length - 1].bb.cy) > medH * 1.8) { rows.push(row); row = []; }
+      row.push(anchors[i]);
+    }
+    rows.push(row);
+
+    const titles = regs.filter(l => !isLabel(l.text) && !isFirstName(l.text)
+      && l.text.replace(/[^A-Za-z]/g, '').length >= 4 && l.bb.h > l.bb.w);
+
+    for (const t of titles) {
+      let best = null, bestD = Infinity;
+      for (const a of anchors) {
+        if (t.bb.cy >= a.bb.y) continue;
+        if (a.bb.cy - t.bb.cy > medH * 22) continue;
+        const d = Math.abs(t.bb.cx - a.bb.cx);
+        if (d < bestD) { bestD = d; best = a; }
+      }
+      if (best && bestD <= best.bb.w * 1.6) (best._titles || (best._titles = [])).push(t);
+    }
+
+    const books = [];
+    for (const r of rows) {
+      r.sort((a, b) => a.bb.cx - b.bb.cx);
+      for (let i = 0; i < r.length; i++) {
+        const a = r[i], bb = a.bb;
+        const leftB  = i > 0 ? (r[i - 1].bb.cx + bb.cx) / 2 : bb.x - bb.w;
+        const rightB = i < r.length - 1 ? (bb.cx + r[i + 1].bb.cx) / 2 : bb.x + bb.w * 2;
+        const inCol  = (reg) => reg.bb.cx >= leftB && reg.bb.cx <= rightB;
+
+        let last = a.text, first = '';
+        const comma = a.text.indexOf(',');
+        if (comma >= 0) { last = a.text.slice(0, comma); first = a.text.slice(comma + 1); }
+        if (!first) {
+          const fn = regs.filter(x => x !== a && inCol(x) && isFirstName(x.text)
+            && Math.abs(x.bb.cy - bb.cy) < medH * 3)
+            .sort((p, q) => Math.abs(p.bb.cy - bb.cy) - Math.abs(q.bb.cy - bb.cy))[0];
+          if (fn) first = fn.text;
+        }
+
+        let lastDisp = last.trim();
+        if (mode !== 'nonfiction' && !STOP.has(clean(last))) {
+          const pre = regs.find(x => x !== a && inCol(x) && PREFIX.has(clean(x.text))
+            && Math.abs(x.bb.cy - bb.cy) < medH * 2.5);
+          if (pre && !clean(last).startsWith(normPrefix(pre.text))) lastDisp = normPrefix(pre.text) + ' ' + lastDisp;
+        }
+
+        const tParts = (a._titles || []).sort((p, q) => q.text.length - p.text.length);
+        const titleText = tParts.length ? tParts[0].text : '';
+
+        books.push({
+          last: keyStr(lastDisp), first: clean(first), title: clean(titleText),
+          num: mode === 'nonfiction' ? parseFloat((a.text.match(/\d{1,3}(\.\d+)?/) || [Infinity])[0]) : 0,
+          text: (lastDisp + (first.trim() ? ', ' + first.trim() : ''))
+            + (titleText ? '  ·  ' + titleText : ''),
+          _qauthor: (lastDisp + ' ' + first).trim(), _qtitle: titleText.trim(),
+          quad: a.quad, score: a.score,
+        });
+      }
+    }
+    return books;
+  }
+
+  function cmpBook(a, b, mode) {
+    if (mode === 'nonfiction') return (a.num - b.num) || strcmp(a.last, b.last);
+    return strcmp(a.last, b.last) || strcmp(a.first, b.first) || strcmp(a.title, b.title);
+  }
+
+  function checkOrder(books, mode) {
+    const n = books.length;
+    if (!n) return [];
+    const dp = new Array(n).fill(1), prev = new Array(n).fill(-1);
+    let best = 0;
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < i; j++) {
+        if (cmpBook(books[j], books[i], mode) <= 0 && dp[j] + 1 > dp[i]) {
+          dp[i] = dp[j] + 1; prev[i] = j;
+        }
+      }
+      if (dp[i] > dp[best]) best = i;
+    }
+    const inOrder = new Set();
+    for (let k = best; k >= 0; k = prev[k]) inOrder.add(k);
+    return books.map((b, i) => ({ ...b, ok: inOrder.has(i) }));
+  }
+
+  // ── Open Library canonicalisation ─────────────────────────────
+  const bigrams = (s) => { const r = new Set(); for (let i = 0; i < s.length - 1; i++) r.add(s.slice(i, i + 2)); return r; };
+  function sim(a, b) {
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+    const A = bigrams(a), B = bigrams(b);
+    let inter = 0; for (const g of A) if (B.has(g)) inter++;
+    return (2 * inter) / (A.size + B.size || 1);
+  }
+  function splitAuthor(name) {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length <= 1) return { last: parts[0] || name, first: '' };
+    let li = parts.length - 1;
+    while (li - 1 >= 1 && PREFIX.has(clean(parts[li - 1]))) li--;
+    return { last: parts.slice(li).join(' '), first: parts.slice(0, li).join(' ') };
+  }
+
+  async function olLookup(book) {
+    const ocrTitle = clean(book._qtitle);
+    if (ocrTitle.length < 5) return null;
+    let data;
+    try {
+      const r = await fetch('https://openlibrary.org/search.json?title='
+        + encodeURIComponent(book._qtitle) + '&limit=5&fields=title,author_name');
+      if (!r.ok) return null;
+      data = await r.json();
+    } catch { return null; }
+    const ocrAuthor = clean(book._qauthor);
+    let best = null, bestScore = 0;
+    for (const d of (data.docs || [])) {
+      const an = (d.author_name && d.author_name[0]) || '';
+      const ti = d.title || '';
+      const s = sim(ocrTitle, clean(ti)) + 0.15 * sim(ocrAuthor, clean(an));
+      if (s > bestScore) { bestScore = s; best = { an, ti }; }
+    }
+    if (best && bestScore >= 0.6) {
+      const { last, first } = splitAuthor(best.an);
+      return { last, first, title: best.ti };
+    }
+    return null;
+  }
+
+  async function canonicalizeAndRecheck(checked, mode) {
+    const flagged = checked.filter(b => !b.ok);
+    await Promise.all(flagged.map(async (b) => {
+      const fix = await olLookup(b);
+      if (fix) {
+        b.last = keyStr(fix.last); b.first = clean(fix.first); b.title = clean(fix.title);
+        b.text = fix.last + (fix.first ? ', ' + fix.first : '') + (fix.title ? '  ·  ' + fix.title : '');
+        b.canon = true;
+      }
+    }));
+    const rechecked = checkOrder(checked, mode);
+    return rechecked.map((b, i) => ({
+      ...b, canon: checked[i].canon,
+      uncertain: !b.ok && !checked[i].canon,
+    }));
+  }
+
+  // ── Render results ────────────────────────────────────────────
+  function renderResults(srcCanvas, checked) {
+    hide(els.processCard); show(els.resultsCard);
+
+    const maxW = 900;
+    const scale = Math.min(1, maxW / srcCanvas.width);
+    const cv = els.overlay;
+    cv.width = srcCanvas.width * scale;
+    cv.height = srcCanvas.height * scale;
+    const ctx = cv.getContext('2d');
+    ctx.drawImage(srcCanvas, 0, 0, cv.width, cv.height);
+    ctx.lineWidth = Math.max(2, cv.width / 400);
+    ctx.font = `bold ${Math.max(12, cv.width / 55)}px sans-serif`;
+
+    const stateColor = (l) => l.ok ? '#22c55e' : (l.uncertain ? '#f59e0b' : '#ef4444');
+    checked.forEach((l, i) => {
+      if (!l.quad) return;
+      const color = stateColor(l);
+      ctx.strokeStyle = color;
+      ctx.beginPath();
+      l.quad.forEach((p, j) => {
+        const x = p[0] * scale, y = p[1] * scale;
+        j ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      });
+      ctx.closePath(); ctx.stroke();
+      const bb = bboxOf(l.quad);
+      ctx.fillStyle = color;
+      ctx.fillText(String(i + 1), bb.x * scale, bb.y * scale - 4);
+    });
+
+    const bad    = checked.filter(l => !l.ok && !l.uncertain).length;
+    const unsure = checked.filter(l => l.uncertain).length;
+    els.statTotal.textContent = checked.length;
+    els.statOk.textContent   = checked.length - bad - unsure;
+    els.statBad.textContent  = bad + (unsure ? ' +' + unsure + '?' : '');
+
+    els.resultList.innerHTML = '';
+    checked.forEach((l, i) => {
+      const div = document.createElement('div');
+      const cls = l.ok ? 'ri-ok' : (l.uncertain ? 'ri-warn' : 'ri-bad');
+      div.className = 'result-item ' + cls;
+      const low = l.score < 0.7;
+
+      let tags = '';
+      if (!l.ok && !l.uncertain) tags += '<span class="tag tag-bad">Out of order</span>';
+      if (l.uncertain)            tags += '<span class="tag tag-warn">Check manually</span>';
+      if (l.canon)                tags += '<span class="tag tag-cat">✓ catalog</span>';
+
+      div.innerHTML =
+        `<div class="ri-num">${i + 1}</div>` +
+        `<div class="ri-body">` +
+          `<div class="ri-text">${escapeHtml(l.text)}</div>` +
+          (tags ? `<div class="ri-tags">${tags}</div>` : '') +
+        `</div>` +
+        `<div class="ri-conf ${low ? 'low' : ''}">${Math.round(l.score * 100)}%</div>`;
+      els.resultList.appendChild(div);
+    });
+  }
+
+  els.retakeBtn.onclick = () => {
+    hide(els.resultsCard); hide(els.errorCard);
+    show(els.inputCard);
+    show(els.captureControls);
+    show(els.capturePlaceholder);
+    hide(els.snapWrap);
+    els.fileInput.value = '';
+  };
+
+  // ── UI helpers ────────────────────────────────────────────────
+  function setProcess(msg, pct) {
+    if (pct !== null && pct !== undefined) els.progressBar.style.width = (pct || 0) + '%';
+    if (msg !== null && msg !== undefined) els.processMsg.textContent = msg;
+  }
+  function show(el) { el.classList.remove('hidden'); }
+  function hide(el) { el.classList.add('hidden'); }
+  function showError(msg) {
+    hide(els.processCard); show(els.errorCard);
+    els.errorMsg.textContent = msg;
+    show(els.inputCard);
+    show(els.captureControls);
+    show(els.capturePlaceholder);
+    hide(els.snapWrap);
+  }
+  function escapeHtml(s) { return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+  function safeStringify(o) { try { return JSON.stringify(o, null, 2).slice(0, 6000); } catch { return String(o); } }
+
+</script>
+</body>
+</html>

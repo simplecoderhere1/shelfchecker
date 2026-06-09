@@ -4,897 +4,2765 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>ShelfCheck</title>
-  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.3/dist/ort.min.js"></script>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
     html { height: 100%; }
+
     body {
-      min-height: 100vh; min-height: 100dvh;
-      background: #08090e;
-      color: #e0e2f0;
+      height: 100vh;
+      height: 100dvh;
+      background: #0d0d0d;
+      color: #f0f0f0;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-      display: flex; flex-direction: column;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
       -webkit-tap-highlight-color: transparent;
     }
 
-    /* ── Header ─────────────────────────────────────────── */
+    /* ── Header ─────────────────────────────────────── */
+
     .header {
-      flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
-      padding: 14px 20px;
-      padding-top: max(14px, env(safe-area-inset-top));
-      background: rgba(9, 10, 18, 0.96);
-      backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-      border-bottom: 1px solid #181a28;
-      position: sticky; top: 0; z-index: 10;
-    }
-    .logo { font-size: 19px; font-weight: 800; letter-spacing: -0.4px; line-height: 1; }
-    .logo span { color: #4f8eff; }
-    .logo sub { font-size: 10px; font-weight: 500; color: #42465c; letter-spacing: 0; vertical-align: baseline; margin-left: 6px; }
-    .engine-pill {
-      font-size: 11px; font-weight: 600; padding: 4px 11px; border-radius: 99px;
-      background: #13141f; border: 1px solid #21243a; color: #42465c;
-      transition: all .3s;
-    }
-    .engine-pill.server { background: #09213f; border-color: #1e4fa0; color: #5b9bff; }
-    .engine-pill.device { background: #1c1500; border-color: #4a3500; color: #e8a020; }
-
-    /* ── Layout ─────────────────────────────────────────── */
-    main {
-      flex: 1; display: flex; flex-direction: column; gap: 14px;
-      padding: 18px 14px;
-      padding-bottom: max(36px, env(safe-area-inset-bottom));
-      max-width: 540px; width: 100%; margin: 0 auto;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      padding-top: max(12px, env(safe-area-inset-top));
+      background: #1c1c1c;
+      border-bottom: 1px solid #2c2c2c;
     }
 
-    /* ── Cards ──────────────────────────────────────────── */
-    .card {
-      background: #0f1019;
-      border: 1px solid #191b2a;
-      border-radius: 18px;
+    .app-name {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: #e0e0e0;
+    }
+
+    .section-tabs {
+      display: flex;
+      background: #2c2c2c;
+      border-radius: 8px;
+      padding: 3px;
+    }
+
+    .tab-btn {
+      padding: 5px 14px;
+      border-radius: 6px;
+      border: none;
+      background: transparent;
+      color: #888;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.18s, color 0.18s;
+      user-select: none;
+    }
+
+    .tab-btn.active {
+      background: #f0f0f0;
+      color: #111;
+    }
+
+    /* ── Camera area ─────────────────────────────────── */
+
+    .camera-wrap {
+      flex: 1;
+      position: relative;
+      background: #000;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .photo-area {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    #video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    #snapshot {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: none;
+    }
+
+    /* Camera error state */
+    .cam-error {
+      position: absolute;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      padding: 32px;
+      text-align: center;
+      color: #666;
+      z-index: 20;
+    }
+    .cam-error.show { display: flex; }
+    .cam-error p { font-size: 14px; line-height: 1.65; max-width: 260px; }
+
+    /* Zoom indicator */
+    .zoom-indicator {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 15;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      font-size: 18px;
+      font-weight: 700;
+      padding: 8px 18px;
+      border-radius: 20px;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    }
+
+    /* Capture flash */
+    @keyframes flash {
+      0%   { opacity: 0.7; }
+      100% { opacity: 0; }
+    }
+    .capture-flash {
+      position: absolute;
+      inset: 0;
+      background: #fff;
+      pointer-events: none;
+      z-index: 18;
+      animation: flash 0.25s ease-out forwards;
+    }
+
+    /* Loading overlay */
+    .loading-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 25;
+      background: rgba(0, 0, 0, 0.55);
+      backdrop-filter: blur(2px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      padding: 0 32px;
+    }
+    .loading-text {
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+    }
+    .loading-bar {
+      width: 100%;
+      max-width: 260px;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 999px;
       overflow: hidden;
     }
-    .card-pad { padding: 16px 18px; }
-    .section-label {
-      font-size: 10px; font-weight: 700; letter-spacing: 1px;
-      text-transform: uppercase; color: #383b52; margin-bottom: 13px;
+    .loading-bar-fill {
+      width: 0%;
+      height: 100%;
+      background: #2563eb;
+      border-radius: 999px;
+      transition: width 0.12s linear;
+    }
+    .loading-pct {
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
     }
 
-    /* ── Mode toggle ─────────────────────────────────────── */
-    .seg { display: flex; gap: 8px; }
-    .seg-btn {
-      flex: 1; padding: 15px 12px; border-radius: 13px;
-      border: 1.5px solid #191b2a; background: #0b0c15;
-      color: #565972; font-size: 15px; font-weight: 600;
-      cursor: pointer; text-align: center; transition: all .18s;
-    }
-    .seg-btn:hover { border-color: #252843; color: #8e93b8; }
-    .seg-btn.active { background: #0a1e42; border-color: #2255a8; color: #fff; }
-    .seg-btn small {
-      display: block; margin-top: 3px;
-      font-size: 11px; font-weight: 500; opacity: .65;
+    /* Results overlay */
+    .results-overlay {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 20;
+      padding: 20px 16px;
+      background: linear-gradient(transparent, rgba(0,0,0,0.85));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
     }
 
-    /* ── Capture ─────────────────────────────────────────── */
-    .cam-stage {
-      position: relative; width: 100%; background: #060710;
-      min-height: 170px; display: flex; align-items: center; justify-content: center;
+    .overlay-badge {
+      font-size: 14px;
+      font-weight: 700;
+      padding: 8px 14px;
+      border-radius: 20px;
     }
-    .cam-stage video, .cam-stage canvas, .cam-stage img { width: 100%; display: block; }
-    .cam-placeholder {
-      display: flex; flex-direction: column; align-items: center; gap: 10px;
-      padding: 48px 24px; color: #32364a; font-size: 13px;
-    }
-    .cam-placeholder svg { opacity: .35; }
-    .frame-guide {
-      position: absolute; inset: 8% 5%;
-      border: 2px dashed rgba(255,255,255,.25); border-radius: 10px; pointer-events: none;
-    }
-    .frame-guide::after {
-      content: "Align shelf straight-on, fill the frame";
-      position: absolute; bottom: -26px; left: 50%; transform: translateX(-50%);
-      font-size: 11px; color: rgba(255,255,255,.4); white-space: nowrap;
-    }
-    .cap-btns { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
-    .cap-btns-row { display: flex; gap: 10px; }
+    .badge-ok           { background: #14532d; color: #4ade80; }
+    .badge-warn         { background: #450a0a; color: #f87171; }
+    .badge-unverifiable { background: #713f12; color: #fde047; }
 
-    /* ── Buttons ─────────────────────────────────────────── */
+    /* Inline error banner */
+    .error-banner {
+      position: absolute;
+      left: 12px; right: 12px;
+      bottom: 16px;
+      z-index: 26;
+      background: #450a0a;
+      border: 1px solid #7f1d1d;
+      border-radius: 12px;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+    .error-banner-msg { font-size: 13px; color: #fecaca; line-height: 1.4; }
+    .error-banner-retry {
+      flex-shrink: 0;
+      background: #ef4444;
+      border: none;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    /* First-run hint / legend */
+    .first-hint {
+      position: absolute;
+      inset: 0;
+      z-index: 24;
+      background: rgba(0,0,0,0.78);
+      backdrop-filter: blur(3px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 28px;
+    }
+    .first-hint-card {
+      background: #1c1c1c;
+      border: 1px solid #333;
+      border-radius: 16px;
+      padding: 22px 20px;
+      max-width: 320px;
+      text-align: left;
+    }
+    .first-hint-card h3 {
+      font-size: 16px;
+      color: #fff;
+      margin-bottom: 12px;
+      text-align: center;
+    }
+    .first-hint-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 11px;
+      font-size: 13px;
+      color: #ccc;
+      line-height: 1.4;
+    }
+    .first-hint-dot {
+      flex-shrink: 0;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      margin-top: 1px;
+    }
+    .first-hint-btn {
+      width: 100%;
+      margin-top: 8px;
+      background: #2563eb;
+      border: none;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 12px;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+
+    .btn-new-scan {
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      background: #2563eb;
+      color: #fff;
+    }
+
+    /* ── Step-through UI ────────────────────────────────── */
+    .step-arrow {
+      position: absolute;
+      z-index: 22;
+      pointer-events: none;
+      transform: translate(-50%, -100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: left 0.28s ease, top 0.28s ease;
+      filter: drop-shadow(0 3px 8px rgba(0,0,0,0.5));
+    }
+    .step-arrow-num {
+      background: #ef4444;
+      color: #fff;
+      font-weight: 800;
+      font-size: 17px;
+      padding: 6px 14px;
+      border-radius: 18px;
+      min-width: 28px;
+      text-align: center;
+      letter-spacing: 0.02em;
+    }
+    .step-arrow-tip {
+      width: 0;
+      height: 0;
+      border-left: 11px solid transparent;
+      border-right: 11px solid transparent;
+      border-top: 16px solid #ef4444;
+      margin-top: -1px;
+    }
+    .step-arrow.step-arrow-unv .step-arrow-num {
+      background: #facc15;
+      color: #1a1a1a;
+    }
+    .step-arrow.step-arrow-unv .step-arrow-tip {
+      border-top-color: #facc15;
+    }
+
+    /* Persistent yellow "?" markers for unverifiable books — always visible */
+    .unv-markers-wrap {
+      position: absolute;
+      inset: 0;
+      z-index: 21;
+      pointer-events: none;
+    }
+    .unv-marker {
+      position: absolute;
+      transform: translate(-50%, -100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      filter: drop-shadow(0 2px 5px rgba(0,0,0,0.45));
+    }
+    .unv-marker-pill {
+      background: #facc15;
+      color: #1a1a1a;
+      font-weight: 800;
+      font-size: 13px;
+      padding: 4px 9px;
+      border-radius: 12px;
+      line-height: 1.1;
+    }
+    .unv-marker-tip {
+      width: 0;
+      height: 0;
+      border-left: 7px solid transparent;
+      border-right: 7px solid transparent;
+      border-top: 10px solid #facc15;
+      margin-top: -1px;
+    }
+
+    /* Destination arrow — green, shown below source arrow when "place before X" */
+    .step-arrow-dest {
+      position: absolute;
+      z-index: 22;
+      pointer-events: none;
+      transform: translate(-50%, -100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: left 0.28s ease, top 0.28s ease;
+      filter: drop-shadow(0 3px 8px rgba(0,0,0,0.5));
+    }
+    .step-arrow-dest-pill {
+      background: #16a34a;
+      color: #fff;
+      font-weight: 700;
+      font-size: 13px;
+      padding: 5px 12px;
+      border-radius: 18px;
+      text-align: center;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+    .step-arrow-dest-tip {
+      width: 0;
+      height: 0;
+      border-left: 9px solid transparent;
+      border-right: 9px solid transparent;
+      border-top: 13px solid #16a34a;
+      margin-top: -1px;
+    }
+
+    .step-card {
+      position: relative;   /* in normal flow — stacks below photo area */
+      flex-shrink: 0;
+      z-index: 22;
+      background: rgba(20, 20, 20, 0.97);
+      backdrop-filter: blur(8px);
+      border-top: 1px solid #2c2c2c;
+      padding: 14px 16px;
+      padding-bottom: max(14px, env(safe-area-inset-bottom));
+      color: #eee;
+    }
+    .step-card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11.5px;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: #888;
+    }
+    .step-summary { color: #f87171; }
+    .step-counter { color: #888; font-variant-numeric: tabular-nums; font-size: 12px; align-self: center; }
+    .step-list-btn {
+      background: #2c2c2c;
+      border: 1px solid #333;
+      color: #ddd;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .step-list-btn:active { transform: scale(0.96); }
+    .step-newscan-full {
+      width: 100%;
+      margin-top: 8px;
+    }
+    .step-title {
+      font-size: 17px;
+      font-weight: 700;
+      margin-top: 4px;
+      color: #fff;
+      line-height: 1.25;
+    }
+    .step-meta {
+      font-size: 13px;
+      color: #aaa;
+      margin-top: 2px;
+    }
+    .step-action {
+      margin-top: 10px;
+      padding: 11px 12px;
+      background: #1e3a8a;
+      color: #dbeafe;
+      border-radius: 8px;
+      font-size: 13.5px;
+      line-height: 1.4;
+      text-align: center;
+    }
+    .step-action b { color: #fff; }
+    .step-nav {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .step-btn {
+      flex: 1;
+      padding: 11px 0;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      border: 1px solid #333;
+      background: #2c2c2c;
+      color: #ddd;
+      cursor: pointer;
+      transition: transform 0.1s ease;
+    }
+    .step-btn:active { transform: scale(0.97); }
+    .step-btn-primary {
+      background: #2563eb;
+      border-color: #2563eb;
+      color: #fff;
+    }
+
+    /* Moves list view — flat list of all misplaced books */
+    .moves-list {
+      position: absolute;
+      inset: 0;
+      z-index: 28;
+      background: #0d0d0d;
+      display: flex;
+      flex-direction: column;
+    }
+    .moves-list-head {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      padding-top: max(14px, env(safe-area-inset-top));
+      border-bottom: 1px solid #2c2c2c;
+      font-size: 14px;
+      font-weight: 600;
+      color: #f87171;
+    }
+    .moves-close {
+      background: #2563eb;
+      border: none;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 7px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .moves-scroll {
+      flex: 1;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .moves-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      text-align: left;
+      padding: 12px 16px;
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid #1c1c1c;
+      cursor: pointer;
+      color: #eee;
+    }
+    .moves-item:active { background: #1c1c1c; }
+    .moves-pos {
+      flex-shrink: 0;
+      width: 30px; height: 30px;
+      border-radius: 50%;
+      background: #ef4444;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .moves-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .moves-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .moves-action { font-size: 12.5px; color: #aaa; }
+    .moves-action b { color: #93c5fd; }
+
+    /* Tap-to-inspect popup */
+    .book-inspect {
+      position: absolute;
+      left: 50%;
+      top: 70px;
+      transform: translateX(-50%);
+      z-index: 30;
+      width: min(86%, 320px);
+      background: rgba(20, 20, 20, 0.96);
+      backdrop-filter: blur(6px);
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 14px 16px 12px;
+      font-size: 13px;
+      color: #eee;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+    .bi-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 4px 0;
+    }
+    .bi-key {
+      color: #888;
+      flex-shrink: 0;
+    }
+    .bi-val {
+      color: #eee;
+      text-align: right;
+      word-break: break-word;
+    }
+    .bi-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .bi-status {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #2c2c2c;
+      font-weight: 600;
+      color: #cbd5e1;
+      text-align: center;
+    }
+    .bi-move {
+      margin-top: 8px;
+      padding: 10px 12px;
+      background: #1e3a8a;
+      border-radius: 8px;
+      color: #dbeafe;
+      font-size: 12.5px;
+      line-height: 1.45;
+      text-align: center;
+    }
+    .bi-move b { color: #fff; }
+    .bi-close {
+      position: absolute;
+      top: 6px;
+      right: 8px;
+      background: transparent;
+      border: none;
+      color: #888;
+      font-size: 22px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 4px 8px;
+    }
+
+    /* ── Debug mode ─────────────────────────────────── */
+    .debug-badge {
+      position: absolute;
+      top: 6px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #dc2626;
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      padding: 2px 8px;
+      border-radius: 6px;
+      z-index: 50;
+      pointer-events: none;
+    }
+
+    /* On-screen timing readout (Debug Mode only) — shows where each scan spends time */
+    .timing-badge {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 40;
+      background: rgba(0, 0, 0, 0.85);
+      border: 1px solid #dc2626;
+      color: #fff;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      padding: 8px 14px;
+      border-radius: 10px;
+      text-align: center;
+      line-height: 1.5;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    }
+    .timing-badge b { color: #f87171; }
+
+    .settings-btn {
+      background: transparent;
+      border: none;
+      color: #888;
+      font-size: 18px;
+      cursor: pointer;
+      padding: 4px;
+      line-height: 1;
+      transition: color 0.15s;
+    }
+    .settings-btn:active { color: #fff; }
+    .settings-btn.debug-active { color: #dc2626; }
+
+    .settings-menu {
+      display: none;
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 4px;
+      background: #1c1c1c;
+      border: 1px solid #333;
+      border-radius: 10px;
+      padding: 8px 0;
+      z-index: 50;
+      min-width: 180px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+    .settings-menu.show { display: block; }
+    .settings-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      font-size: 13px;
+      color: #ddd;
+      cursor: pointer;
+      user-select: none;
+    }
+    .settings-item:active { background: #2c2c2c; }
+    .settings-toggle {
+      width: 36px; height: 20px;
+      border-radius: 10px;
+      background: #444;
+      position: relative;
+      transition: background 0.2s;
+      flex-shrink: 0;
+    }
+    .settings-toggle.on { background: #dc2626; }
+    .settings-toggle::after {
+      content: '';
+      position: absolute;
+      top: 2px; left: 2px;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform 0.2s;
+    }
+    .settings-toggle.on::after { transform: translateX(16px); }
+
+    .debug-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 25;
+      background: #0d0d0d;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .debug-section {
+      padding: 12px 16px;
+      border-bottom: 1px solid #2c2c2c;
+    }
+    .debug-section-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #888;
+      margin-bottom: 8px;
+    }
+    .debug-img {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid #333;
+    }
+    .debug-prompt {
+      font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      color: #aaa;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 200px;
+      overflow-y: auto;
+      background: #111;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #2c2c2c;
+    }
+    .debug-book-table {
+      width: 100%;
+      font-size: 11.5px;
+      border-collapse: collapse;
+    }
+    .debug-book-table th {
+      text-align: left;
+      color: #888;
+      font-weight: 600;
+      padding: 6px 8px;
+      border-bottom: 1px solid #333;
+      position: sticky;
+      top: 0;
+      background: #0d0d0d;
+    }
+    .debug-book-table td {
+      padding: 6px 8px;
+      border-bottom: 1px solid #1c1c1c;
+      color: #ddd;
+      vertical-align: top;
+      max-width: 120px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .debug-book-table tr.book-ok td:first-child { border-left: 3px solid #4ade80; }
+    .debug-book-table tr.book-bad td:first-child { border-left: 3px solid #ef4444; }
+    .debug-book-table tr.book-unv td:first-child { border-left: 3px solid #facc15; }
+    .debug-conf-dot {
+      display: inline-block;
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      margin-right: 4px;
+      vertical-align: middle;
+    }
+    .debug-actions {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px;
+      padding-bottom: max(12px, env(safe-area-inset-bottom));
+    }
+    .debug-actions .btn { flex: 1; }
+
+    /* ── Footer ──────────────────────────────────────── */
+
+    .footer {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 18px 24px;
+      padding-bottom: max(18px, env(safe-area-inset-bottom));
+      background: #1c1c1c;
+      border-top: 1px solid #2c2c2c;
+      min-height: 88px;
+    }
+
+    .capture-btn {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      border: 3px solid rgba(255, 255, 255, 0.8);
+      background: rgba(255, 255, 255, 0.1);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.1s ease, background 0.1s ease;
+    }
+    .capture-btn:active {
+      transform: scale(0.9);
+      background: rgba(255, 255, 255, 0.22);
+    }
+    .capture-btn-dot {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: #fff;
+      pointer-events: none;
+    }
+
+    .action-btns {
+      display: none;
+      gap: 12px;
+    }
+    .action-btns.show { display: flex; }
+
     .btn {
-      display: flex; align-items: center; justify-content: center; gap: 8px;
-      width: 100%; padding: 15px 18px; border-radius: 13px; border: none;
-      font-size: 15px; font-weight: 700; cursor: pointer;
-      transition: transform .1s, opacity .15s, filter .15s;
+      padding: 13px 26px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: transform 0.1s ease;
     }
-    .btn:active { transform: scale(0.97); filter: brightness(1.1); }
-    .btn:disabled { opacity: .4; cursor: not-allowed; }
-    .btn-primary { background: #4f8eff; color: #fff; }
-    .btn-secondary { background: #12131f; color: #b0b4d4; border: 1.5px solid #21243a; }
-    .btn-ghost { background: transparent; color: #565972; border: 1.5px solid #191b2a; font-size: 14px; }
+    .btn:active { transform: scale(0.96); }
 
-    /* ── Processing ──────────────────────────────────────── */
-    .proc-thumb {
-      width: 100%; max-height: 190px; overflow: hidden;
-      background: #060710; display: flex; align-items: center;
-    }
-    .proc-thumb img { width: 100%; object-fit: cover; display: block; opacity: .75; }
-
-    .proc-body { padding: 20px 18px; }
-    .proc-headline {
-      font-size: 16px; font-weight: 700; color: #c8ccec; margin-bottom: 18px;
+    .btn-retake {
+      background: #2e2e2e;
+      color: #ddd;
     }
 
-    .proc-steps { display: flex; flex-direction: column; gap: 14px; margin-bottom: 20px; }
-    .proc-step { display: flex; align-items: center; gap: 13px; }
-    .step-dot {
-      width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
-      display: flex; align-items: center; justify-content: center;
-      border: 1.5px solid #21243a; background: #0b0c15; font-size: 10px;
-      transition: all .3s;
+    .btn-analyze {
+      background: #2563eb;
+      color: #fff;
     }
-    .proc-step.done .step-dot { background: #0c2218; border-color: #22c55e; color: #22c55e; }
-    .proc-step.active .step-dot {
-      background: #0a1e42; border-color: #4f8eff; color: #4f8eff;
-      animation: pulse-step 1.4s ease-in-out infinite;
-    }
-    @keyframes pulse-step {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(79,142,255,.5); }
-      60% { box-shadow: 0 0 0 7px rgba(79,142,255,0); }
-    }
-    .step-label { font-size: 14px; color: #32364a; transition: color .3s; }
-    .proc-step.done .step-label { color: #4a4e65; }
-    .proc-step.active .step-label { color: #c8ccec; font-weight: 600; }
-
-    .prog-track { height: 5px; background: #191b2a; border-radius: 99px; overflow: hidden; margin-bottom: 12px; }
-    .prog-fill {
-      height: 100%; width: 0%; border-radius: 99px;
-      background: linear-gradient(90deg, #3575f0, #6fa4ff);
-      transition: width .5s cubic-bezier(.4,0,.2,1);
-    }
-    .proc-eta { font-size: 12px; color: #383b52; text-align: center; }
-
-    /* ── Results ─────────────────────────────────────────── */
-    .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 16px 16px 0; }
-    .stat-cell {
-      padding: 14px 8px; border-radius: 13px; text-align: center;
-      background: #0b0c15; border: 1px solid #191b2a;
-    }
-    .stat-cell .n { font-size: 30px; font-weight: 800; line-height: 1; }
-    .stat-cell .l { font-size: 10px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; color: #383b52; margin-top: 5px; }
-    .stat-cell.total .n { color: #b0b4d4; }
-    .stat-cell.ok .n { color: #22c55e; }
-    .stat-cell.bad .n { color: #ef4444; }
-
-    .overlay-wrap { padding: 14px; }
-    .overlay-wrap canvas { width: 100%; border-radius: 10px; display: block; }
-
-    .result-list { display: flex; flex-direction: column; }
-    .result-item {
-      display: flex; align-items: flex-start; gap: 12px;
-      padding: 13px 18px;
-    }
-    .result-item:not(:last-child) { border-bottom: 1px solid #13141f; }
-    .result-item.ri-bad  { background: rgba(239,68,68,.05); }
-    .result-item.ri-warn { background: rgba(245,158,11,.05); }
-
-    .ri-num {
-      width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 12px; font-weight: 700;
-      background: #191b2a; color: #4a4e65; margin-top: 1px;
-    }
-    .result-item.ri-bad .ri-num  { background: #250e0e; color: #f87171; }
-    .result-item.ri-warn .ri-num { background: #211600; color: #fbbf24; }
-    .result-item.ri-ok .ri-num   { background: #0c2218; color: #4ade80; }
-
-    .ri-body { flex: 1; min-width: 0; }
-    .ri-text { font-size: 14px; color: #9094b8; line-height: 1.45; word-break: break-word; }
-    .ri-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
-    .tag {
-      font-size: 10px; font-weight: 700; letter-spacing: .3px;
-      padding: 2px 8px; border-radius: 99px;
-    }
-    .tag-bad    { background: #2d1010; color: #f87171; }
-    .tag-warn   { background: #211600; color: #fbbf24; }
-    .tag-ok     { background: #0c2218; color: #4ade80; }
-    .tag-cat    { background: #0c2218; color: #4ade80; border: 1px solid #22c55e; }
-
-    .ri-conf { font-size: 11px; font-weight: 600; color: #32364a; flex-shrink: 0; margin-top: 6px; }
-    .ri-conf.low { color: #e8a020; }
-
-    .retake-wrap { padding: 14px; }
-
-    /* ── Error ───────────────────────────────────────────── */
-    .err-body { padding: 16px 18px; }
-    .err-msg {
-      background: #1a0a0a; border: 1px solid #3d1212; border-radius: 10px;
-      padding: 14px; color: #fca5a5; font-size: 13px; line-height: 1.6; white-space: pre-wrap;
+    .btn-analyze:disabled {
+      background: #1a2f5e;
+      color: #4e71b5;
+      cursor: not-allowed;
+      transform: none;
     }
 
-    /* ── Debug ───────────────────────────────────────────── */
-    .dbg-wrap { padding: 4px 16px 16px; }
-    details summary { font-size: 12px; color: #32364a; cursor: pointer; padding: 8px 0; }
-    pre { margin-top: 8px; background: #060710; border: 1px solid #191b2a; border-radius: 10px; padding: 12px; font-size: 11px; overflow: auto; max-height: 220px; color: #4f8eff; }
+    /* ── Landscape layout ────────────────────────────────
+       In landscape the vertical stack wastes height. Flip to a row:
+       left sidebar (section tabs + settings) | camera | right sidebar (shutter).
+       The camera area fills all remaining width so you see the full shelf.
+    ─────────────────────────────────────────────────── */
+    @media (orientation: landscape) {
+      body { flex-direction: row; }
 
-    .hidden { display: none !important; }
+      /* Left sidebar */
+      .header {
+        flex-direction: column;
+        width: auto;
+        border-bottom: none;
+        border-right: 1px solid #2c2c2c;
+        padding: 8px;
+        padding-top: max(8px, env(safe-area-inset-top));
+        padding-left: max(8px, env(safe-area-inset-left));
+        gap: 10px;
+        justify-content: flex-start;
+        align-items: center;
+      }
+      .app-name { display: none; }
+      .section-tabs { flex-direction: column; }
+      .tab-btn { padding: 6px 10px; font-size: 12px; }
+
+      /* Right sidebar */
+      .footer {
+        flex-direction: column;
+        width: auto;
+        min-height: 0;
+        border-top: none;
+        border-left: 1px solid #2c2c2c;
+        padding: 16px 10px;
+        padding-right: max(10px, env(safe-area-inset-right));
+        padding-bottom: max(16px, env(safe-area-inset-bottom));
+        justify-content: center;
+        gap: 12px;
+      }
+      .action-btns { flex-direction: column; }
+      .btn { padding: 10px 16px; font-size: 13px; }
+
+      /* Step card: shrink it in landscape so it doesn't eat too much height */
+      .step-card {
+        padding: 10px 14px;
+        padding-bottom: max(10px, env(safe-area-inset-bottom));
+      }
+      .step-title { font-size: 15px; }
+      .step-action { font-size: 12px; padding: 8px 10px; margin-top: 7px; }
+      .step-nav { margin-top: 8px; }
+      .step-btn { padding: 9px 0; font-size: 13px; }
+    }
   </style>
 </head>
 <body>
 
-<header class="header">
-  <div class="logo">Shelf<span>Check</span><sub>Champaign Public Library</sub></div>
-  <div class="engine-pill" id="engineBadge">idle</div>
-</header>
-
-<main>
-
-  <!-- 1 · Section type -->
-  <div class="card" id="setupCard">
-    <div class="card-pad">
-      <div class="section-label">Section type</div>
-      <div class="seg">
-        <button class="seg-btn active" id="segFiction" data-mode="fiction">
-          Fiction
-          <small>by author surname</small>
-        </button>
-        <button class="seg-btn" id="segNonfiction" data-mode="nonfiction">
-          Nonfiction
-          <small>by Dewey number</small>
-        </button>
+  <header class="header">
+    <span class="app-name">ShelfCheck</span>
+    <div class="section-tabs" role="group" aria-label="Collection section">
+      <button class="tab-btn active" data-section="auto">Auto</button>
+      <button class="tab-btn"        data-section="fiction">Fiction</button>
+      <button class="tab-btn"        data-section="nonfiction">Nonfiction</button>
+    </div>
+    <div style="position:relative">
+      <button class="settings-btn" id="settingsBtn" aria-label="Settings">&#9881;</button>
+      <div class="settings-menu" id="settingsMenu">
+        <div class="settings-item" id="debugToggle">
+          <span>Debug Mode</span>
+          <div class="settings-toggle" id="debugToggleSwitch"></div>
+        </div>
       </div>
     </div>
-  </div>
+  </header>
 
-  <!-- 2 · Capture -->
-  <div class="card" id="inputCard">
-    <div class="cam-stage" id="cameraStage">
-      <video id="video" playsinline muted autoplay class="hidden"></video>
-      <div class="frame-guide hidden" id="frameGuide"></div>
-      <img id="placeholder" alt="" class="hidden">
-      <div class="cam-placeholder" id="capturePlaceholder">
-        <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3">
+  <div class="camera-wrap" id="cameraWrap">
+    <!-- photo-area is the containing block for video/canvas and all their absolute overlays -->
+    <div class="photo-area" id="photoArea">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="snapshot"></canvas>
+      <div class="zoom-indicator" id="zoomIndicator"></div>
+
+      <div class="cam-error" id="camError">
+        <svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 24 24"
+             fill="none" stroke="currentColor" stroke-width="1.2"
+             stroke-linecap="round" stroke-linejoin="round">
           <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-          <circle cx="12" cy="13" r="4"/>
+          <line x1="1" y1="1" x2="23" y2="23"/>
         </svg>
-        Photograph one shelf straight-on
+        <p>Camera access is required.<br>Please allow permissions and reload.</p>
       </div>
     </div>
-    <div class="cap-btns" id="captureControls">
-      <button class="btn btn-primary" id="startCamBtn">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M2 12a9.9 9.9 0 0 1 2.3-6.3M21.7 5.7A9.9 9.9 0 0 1 22 12"/><path d="M12 2a9.9 9.9 0 0 1 7.7 3.7M4.3 20.3A9.9 9.9 0 0 1 12 22"/></svg>
-        Use Camera
-      </button>
-      <div class="cap-btns-row">
-        <button class="btn btn-secondary" id="uploadBtn">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          Upload Photo
-        </button>
-      </div>
-    </div>
-    <div class="cap-btns hidden" id="snapWrap">
-      <button class="btn btn-primary" id="snapBtn">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-        Capture Shelf
-      </button>
-    </div>
-    <input type="file" id="fileInput" accept="image/*" class="hidden">
+    <!-- step-through, loading overlay, results overlay, book-inspect appended here by JS -->
   </div>
 
-  <!-- 3 · Processing -->
-  <div class="card hidden" id="processCard">
-    <div class="proc-thumb" id="procThumb"></div>
-    <div class="proc-body">
-      <div class="proc-headline">Reading your shelf…</div>
-      <div class="proc-steps">
-        <div class="proc-step" id="procStep0">
-          <div class="step-dot"></div>
-          <div class="step-label">Uploading photo</div>
-        </div>
-        <div class="proc-step" id="procStep1">
-          <div class="step-dot"></div>
-          <div class="step-label">Reading spine labels</div>
-        </div>
-        <div class="proc-step" id="procStep2">
-          <div class="step-dot"></div>
-          <div class="step-label">Checking order</div>
-        </div>
-        <div class="proc-step" id="procStep3">
-          <div class="step-dot"></div>
-          <div class="step-label">Verifying with catalogue</div>
-        </div>
-      </div>
-      <div class="prog-track"><div class="prog-fill" id="progressBar"></div></div>
-      <div class="proc-eta" id="processMsg">About 20 seconds — keep this page open</div>
+  <footer class="footer">
+    <button class="capture-btn" id="captureBtn" aria-label="Capture photo">
+      <div class="capture-btn-dot"></div>
+    </button>
+    <div class="action-btns" id="actionBtns">
+      <button class="btn btn-retake"  id="retakeBtn">Retake</button>
+      <button class="btn btn-analyze" id="analyzeBtn" disabled>Analyze</button>
     </div>
-  </div>
+  </footer>
 
-  <!-- 4 · Results -->
-  <div class="card hidden" id="resultsCard">
-    <div class="stats-row">
-      <div class="stat-cell total"><div class="n" id="statTotal">0</div><div class="l">scanned</div></div>
-      <div class="stat-cell ok"><div class="n" id="statOk">0</div><div class="l">in order</div></div>
-      <div class="stat-cell bad"><div class="n" id="statBad">0</div><div class="l">issues</div></div>
-    </div>
-    <div class="overlay-wrap"><canvas id="overlay"></canvas></div>
-    <div class="result-list" id="resultList"></div>
-    <div class="retake-wrap">
-      <button class="btn btn-ghost" id="retakeBtn">↩ Scan Another Shelf</button>
-    </div>
-  </div>
-
-  <!-- Error -->
-  <div class="card hidden" id="errorCard">
-    <div class="err-body">
-      <div class="section-label">Something went wrong</div>
-      <div class="err-msg" id="errorMsg"></div>
-    </div>
-  </div>
-
-  <!-- Debug -->
-  <div class="card">
-    <div class="dbg-wrap">
-      <details id="debugBox">
-        <summary>Debug — raw OCR output</summary>
-        <pre id="rawDump">No scan yet.</pre>
-      </details>
-    </div>
-  </div>
-
-</main>
-
-<script type="module">
-  // ─────────────────────────────────────────────────────────────
-  // ShelfCheck — library shelf-order checker using OCR
-  // Primary: RapidOCR backend on Hugging Face Spaces
-  // Fallback: PaddleOCR PP-OCRv3 on onnxruntime-web (in-browser)
-  // ─────────────────────────────────────────────────────────────
-
-  const $ = (id) => document.getElementById(id);
-  const els = {
-    engineBadge:       $('engineBadge'),
-    segFiction:        $('segFiction'),
-    segNonfiction:     $('segNonfiction'),
-    cameraStage:       $('cameraStage'),
-    video:             $('video'),
-    frameGuide:        $('frameGuide'),
-    capturePlaceholder:$('capturePlaceholder'),
-    startCamBtn:       $('startCamBtn'),
-    uploadBtn:         $('uploadBtn'),
-    captureControls:   $('captureControls'),
-    snapBtn:           $('snapBtn'),
-    snapWrap:          $('snapWrap'),
-    fileInput:         $('fileInput'),
-    inputCard:         $('inputCard'),
-    processCard:       $('processCard'),
-    processMsg:        $('processMsg'),
-    progressBar:       $('progressBar'),
-    procThumb:         $('procThumb'),
-    resultsCard:       $('resultsCard'),
-    overlay:           $('overlay'),
-    resultList:        $('resultList'),
-    statTotal:         $('statTotal'),
-    statOk:            $('statOk'),
-    statBad:           $('statBad'),
-    retakeBtn:         $('retakeBtn'),
-    errorCard:         $('errorCard'),
-    errorMsg:          $('errorMsg'),
-    rawDump:           $('rawDump'),
-  };
-
-  let mode = 'fiction';
-  let ocr = null;
-  let stream = null;
-
-  // ── Section toggle ───────────────────────────────────────────
-  els.segFiction.onclick   = () => setMode('fiction');
-  els.segNonfiction.onclick = () => setMode('nonfiction');
-  function setMode(m) {
-    mode = m;
-    els.segFiction.classList.toggle('active', m === 'fiction');
-    els.segNonfiction.classList.toggle('active', m === 'nonfiction');
-  }
-
-  // ── Camera ───────────────────────────────────────────────────
-  els.startCamBtn.onclick = async () => {
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: false,
+  <script>
+    const video         = document.getElementById('video');
+    const snapshot      = document.getElementById('snapshot');
+    const captureBtn    = document.getElementById('captureBtn');
+    const actionBtns    = document.getElementById('actionBtns');
+    const retakeBtn     = document.getElementById('retakeBtn');
+    const analyzeBtn    = document.getElementById('analyzeBtn');
+    const camError      = document.getElementById('camError');
+    const cameraWrap    = document.getElementById('cameraWrap');
+    const photoArea     = document.getElementById('photoArea');
+    const zoomIndicator = document.getElementById('zoomIndicator');
+    // Section toggle — remembers the last-used section across reloads.
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        try { localStorage.setItem('shelfcheck.section', btn.dataset.section); } catch {}
       });
-      els.video.srcObject = stream;
-      els.video.classList.remove('hidden');
-      els.frameGuide.classList.remove('hidden');
-      hide(els.captureControls);
-      hide(els.capturePlaceholder);
-      show(els.snapWrap);
-    } catch (e) {
-      showError('Could not open the camera.\n' + e.message + '\n\nTip: camera requires HTTPS. You can still use "Upload Photo".');
-    }
-  };
-
-  els.snapBtn.onclick = () => {
-    const v = els.video;
-    const c = document.createElement('canvas');
-    c.width = v.videoWidth; c.height = v.videoHeight;
-    c.getContext('2d').drawImage(v, 0, 0);
-    stopCamera();
-    runPipeline(c);
-  };
-
-  function stopCamera() {
-    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
-    els.video.classList.add('hidden');
-    els.frameGuide.classList.add('hidden');
-  }
-
-  // ── Upload ───────────────────────────────────────────────────
-  els.uploadBtn.onclick = () => els.fileInput.click();
-  els.fileInput.onchange = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const img = new Image();
-    img.src = URL.createObjectURL(file);
-    await img.decode();
-    const c = document.createElement('canvas');
-    c.width = img.naturalWidth; c.height = img.naturalHeight;
-    c.getContext('2d').drawImage(img, 0, 0);
-    runPipeline(c);
-  };
-
-  // ── OCR backend ──────────────────────────────────────────────
-  // Deployed on Hugging Face Spaces — replace the URL below with
-  // your Space's public URL after deploying server/.
-  // To override locally: localStorage.setItem('shelfcheck_backend', 'http://127.0.0.1:8000')
-  const BACKEND_URL = localStorage.getItem('shelfcheck_backend') || 'https://krfish-shelfcheck-ocr.hf.space';
-  const BACKEND_TIMEOUT = 45000;
-
-  async function ocrViaBackend(canvas) {
-    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.85));
-    const fd = new FormData();
-    fd.append('file', blob, 'shelf.jpg');
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), BACKEND_TIMEOUT);
-    try {
-      const resp = await fetch(BACKEND_URL + '/ocr', { method: 'POST', body: fd, signal: ctrl.signal });
-      if (!resp.ok) throw new Error('server returned ' + resp.status);
-      const data = await resp.json();
-      return data.regions || [];
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-  // ── On-device fallback ────────────────────────────────────────
-  let ppocr = null;
-  async function getOcr() {
-    if (ocr) return ocr;
-    setProcess('Loading on-device OCR (first time ~13 MB)…', 10);
-    ppocr = await import('./ppocr.js');
-    await ppocr.init({
-      detUrl: './models/det.onnx',
-      recUrl: './models/rec.onnx',
-      dictUrl: './models/ppocr_keys_v1.txt',
-      onStatus: (s) => setProcess(s, 35),
     });
-    ocr = ppocr;
-    return ocr;
-  }
 
-  function fitCanvas(src, maxSide = 2048) {
-    const long = Math.max(src.width, src.height);
-    if (long <= maxSide) return src;
-    const s = maxSide / long;
-    const c = document.createElement('canvas');
-    c.width = Math.round(src.width * s);
-    c.height = Math.round(src.height * s);
-    c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
-    return c;
-  }
-
-  // ── Progress crawl animation ──────────────────────────────────
-  let _crawlTimer = null;
-  function startCrawl(fromPct, toPct, durationMs) {
-    if (_crawlTimer) clearInterval(_crawlTimer);
-    const intervalMs = 120;
-    const steps = Math.ceil(durationMs / intervalMs);
-    let step = 0;
-    _crawlTimer = setInterval(() => {
-      step = Math.min(step + 1, steps);
-      const t = step / steps;
-      const eased = 1 - Math.pow(1 - t, 2.5);
-      els.progressBar.style.width = (fromPct + (toPct - fromPct) * eased) + '%';
-      if (step >= steps) { clearInterval(_crawlTimer); _crawlTimer = null; }
-    }, intervalMs);
-    return () => { if (_crawlTimer) { clearInterval(_crawlTimer); _crawlTimer = null; } };
-  }
-
-  function setStep(i) {
-    for (let j = 0; j < 4; j++) {
-      const el = $('procStep' + j);
-      if (!el) continue;
-      el.classList.remove('active', 'done');
-      if (j < i) el.classList.add('done');
-      if (j === i) el.classList.add('active');
-    }
-  }
-  function doneStep(i) {
-    const el = $('procStep' + i);
-    if (el) { el.classList.remove('active'); el.classList.add('done'); }
-  }
-
-  // ── Main pipeline ─────────────────────────────────────────────
-  async function runPipeline(canvas) {
-    // Show captured photo as thumbnail in processing screen
-    const thumbImg = document.createElement('img');
-    thumbImg.src = canvas.toDataURL('image/jpeg', 0.6);
-    els.procThumb.innerHTML = '';
-    els.procThumb.appendChild(thumbImg);
-
-    hide(els.inputCard); hide(els.resultsCard); hide(els.errorCard);
-    show(els.processCard);
-
-    // Reset steps and bar
-    for (let j = 0; j < 4; j++) {
-      const el = $('procStep' + j);
-      if (el) el.classList.remove('active', 'done');
-    }
-    els.progressBar.style.width = '0%';
-
+    // Restore saved section on load
     try {
-      // Nonfiction Dewey stickers are small — needs higher resolution than fiction labels
-      const small = fitCanvas(canvas, mode === 'nonfiction' ? 1280 : 1024);
-      let raw;
+      const savedSection = localStorage.getItem('shelfcheck.section');
+      if (savedSection) {
+        const savedBtn = document.querySelector(`.tab-btn[data-section="${savedSection}"]`);
+        if (savedBtn) {
+          document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+          savedBtn.classList.add('active');
+        }
+      }
+    } catch {}
+
+    // ── Camera + zoom setup ───────────────────────────────
+    let videoTrack = null;
+    let zoomCaps   = null;
+    let currentZoom = 1;
+
+    async function startCamera() {
       try {
-        setStep(0); setProcess('Uploading photo…', 8);
-        // Give the bar a head start, then hand off to the crawl
-        await new Promise(r => setTimeout(r, 300));
-        const etaSec = mode === 'nonfiction' ? 45 : 20;
-        setStep(1); setProcess(`About ${etaSec} seconds — keep this page open`, null);
-        const stopCrawl = startCrawl(12, 78, (etaSec - 2) * 1000);
-        raw = await ocrViaBackend(small);
-        stopCrawl();
-        doneStep(0); doneStep(1);
-        els.engineBadge.textContent = 'server ⚡';
-        els.engineBadge.className = 'engine-pill server';
-      } catch (err) {
-        console.warn('[ShelfCheck] backend unavailable, falling back to on-device:', err);
-        setStep(1); setProcess('Server unavailable — using on-device OCR…', 15);
-        const engine = await getOcr();
-        raw = await engine.runOcr(small, (s) => setProcess(s, 60));
-        doneStep(0); doneStep(1);
-        els.engineBadge.textContent = 'on-device';
-        els.engineBadge.className = 'engine-pill device';
-      }
-
-      els.rawDump.textContent = safeStringify(raw.map(r => ({ text: r.text, score: +(r.score || 0).toFixed(2), quad: r.quad || r.box })));
-      console.log('[ShelfCheck] raw OCR result:', raw);
-
-      const lines = normalizeOcr(raw);
-      if (!lines.length) throw new Error('No readable text found. Try a sharper, straight-on photo.');
-
-      setStep(2); setProcess('Grouping books…', 85);
-      const books = groupBooks(lines, mode);
-      if (!books.length) throw new Error(
-        'Read ' + lines.length + ' text snippets but none looked like spine labels.\n' +
-        'Open the Debug panel to see what OCR detected.');
-
-      let checked = checkOrder(books, mode);
-      doneStep(2);
-
-      if (mode === 'fiction') {
-        setStep(3); setProcess('Verifying with catalogue…', 92);
-        checked = await canonicalizeAndRecheck(checked, mode);
-        doneStep(3);
-      }
-
-      setProcess('Done!', 100);
-      await new Promise(r => setTimeout(r, 280));
-      renderResults(small, checked);
-    } catch (e) {
-      console.error(e);
-      showError(e.message || String(e));
-    }
-  }
-
-  // ── Normalize OCR result ──────────────────────────────────────
-  function normalizeOcr(raw) {
-    return (raw || []).map(r => {
-      let quad = r.quad;
-      if (!quad && r.box) {
-        const b = r.box, x = num(b.x), y = num(b.y), w = num(b.w), h = num(b.h);
-        quad = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
-      }
-      return { text: (r.text || '').trim(), score: num(r.score), quad };
-    }).filter(l => l.text && l.quad);
-  }
-
-  const num = (v) => (typeof v === 'number' ? v : parseFloat(v) || 0);
-
-  function bboxOf(quad) {
-    if (!quad) return null;
-    const xs = quad.map(p => p[0]), ys = quad.map(p => p[1]);
-    return { x: Math.min(...xs), y: Math.min(...ys),
-             w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys),
-             cx: (Math.min(...xs) + Math.max(...xs)) / 2,
-             cy: (Math.min(...ys) + Math.max(...ys)) / 2 };
-  }
-
-  // ── Per-book grouping ─────────────────────────────────────────
-  const clean    = (s) => (s || '').replace(/[^A-Za-z]/g, '').toUpperCase();
-  const keyStr   = (s) => (s || '').toUpperCase().replace(/[^A-Z ]/g, ' ').replace(/\s+/g, ' ').trim();
-  const strcmp   = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
-  const STOP     = new Set(['THE', 'OF', 'AND', 'VON', 'VAN', 'DE', 'LA', 'DER', 'DEL', 'YON']);
-  const PREFIX   = new Set(['VON', 'VAN', 'DE', 'DER', 'DEL', 'LA', 'DU', 'YON']);
-  const normPrefix = (s) => { const c = clean(s); return c === 'YON' ? 'VON' : c; };
-
-  function isSurname(text) {
-    const t = text.trim().replace(/[.,]+$/, '');
-    const letters = t.replace(/[^A-Za-z]/g, '');
-    if (letters.length < 2) return false;
-    const upper = [...letters].filter(c => c === c.toUpperCase()).length / letters.length;
-    return upper >= 0.7;
-  }
-  const isFirstName = (t) => /^[A-Z][a-z]+\.?$/.test(t.trim());
-
-  function iou(a, b) {
-    const x0 = Math.max(a.x, b.x), y0 = Math.max(a.y, b.y);
-    const x1 = Math.min(a.x + a.w, b.x + b.w), y1 = Math.min(a.y + a.h, b.y + b.h);
-    const inter = Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
-    return inter ? inter / (a.w * a.h + b.w * b.h - inter) : 0;
-  }
-
-  function groupBooks(lines, mode) {
-    const regs = lines.map(l => ({ ...l, bb: bboxOf(l.quad) }))
-      .filter(l => l.bb && l.score >= 0.3);
-    if (!regs.length) return [];
-
-    const isLabel = mode === 'nonfiction'
-      ? (t) => /\d{1,3}(\.\d+)?/.test(t)
-      : (t) => isSurname(t) && !STOP.has(clean(t));
-
-    const isHorizontal = (bb) => bb.w >= bb.h * 0.9;
-    let anchors = regs.filter(l => isLabel(l.text) && isHorizontal(l.bb)
-      && (mode === 'nonfiction' || clean(l.text).length >= 4 || l.text.includes(',')));
-    if (!anchors.length) return [];
-
-    anchors.sort((a, b) => b.text.length - a.text.length || b.score - a.score);
-    const kept = [];
-    for (const a of anchors) if (!kept.some(k => iou(k.bb, a.bb) > 0.4)) kept.push(a);
-    anchors = kept;
-
-    const hs = anchors.map(a => a.bb.h).sort((x, y) => x - y);
-    const medH = hs[hs.length >> 1] || 20;
-    anchors.sort((a, b) => a.bb.cy - b.bb.cy);
-    const rows = [];
-    let row = [anchors[0]];
-    for (let i = 1; i < anchors.length; i++) {
-      if (Math.abs(anchors[i].bb.cy - row[row.length - 1].bb.cy) > medH * 1.8) { rows.push(row); row = []; }
-      row.push(anchors[i]);
-    }
-    rows.push(row);
-
-    const titles = regs.filter(l => !isLabel(l.text) && !isFirstName(l.text)
-      && l.text.replace(/[^A-Za-z]/g, '').length >= 4 && l.bb.h > l.bb.w);
-
-    for (const t of titles) {
-      let best = null, bestD = Infinity;
-      for (const a of anchors) {
-        if (t.bb.cy >= a.bb.y) continue;
-        if (a.bb.cy - t.bb.cy > medH * 22) continue;
-        const d = Math.abs(t.bb.cx - a.bb.cx);
-        if (d < bestD) { bestD = d; best = a; }
-      }
-      if (best && bestD <= best.bb.w * 1.6) (best._titles || (best._titles = [])).push(t);
-    }
-
-    const books = [];
-    for (const r of rows) {
-      r.sort((a, b) => a.bb.cx - b.bb.cx);
-      for (let i = 0; i < r.length; i++) {
-        const a = r[i], bb = a.bb;
-        const leftB  = i > 0 ? (r[i - 1].bb.cx + bb.cx) / 2 : bb.x - bb.w;
-        const rightB = i < r.length - 1 ? (bb.cx + r[i + 1].bb.cx) / 2 : bb.x + bb.w * 2;
-        const inCol  = (reg) => reg.bb.cx >= leftB && reg.bb.cx <= rightB;
-
-        let last = a.text, first = '';
-        const comma = a.text.indexOf(',');
-        if (comma >= 0) { last = a.text.slice(0, comma); first = a.text.slice(comma + 1); }
-        if (!first) {
-          const fn = regs.filter(x => x !== a && inCol(x) && isFirstName(x.text)
-            && Math.abs(x.bb.cy - bb.cy) < medH * 3)
-            .sort((p, q) => Math.abs(p.bb.cy - bb.cy) - Math.abs(q.bb.cy - bb.cy))[0];
-          if (fn) first = fn.text;
-        }
-
-        let lastDisp = last.trim();
-        if (mode !== 'nonfiction' && !STOP.has(clean(last))) {
-          const pre = regs.find(x => x !== a && inCol(x) && PREFIX.has(clean(x.text))
-            && Math.abs(x.bb.cy - bb.cy) < medH * 2.5);
-          if (pre && !clean(last).startsWith(normPrefix(pre.text))) lastDisp = normPrefix(pre.text) + ' ' + lastDisp;
-        }
-
-        const tParts = (a._titles || []).sort((p, q) => q.text.length - p.text.length);
-        const titleText = tParts.length ? tParts[0].text : '';
-
-        books.push({
-          last: keyStr(lastDisp), first: clean(first), title: clean(titleText),
-          num: mode === 'nonfiction' ? parseFloat((a.text.match(/\d{1,3}(\.\d+)?/) || [Infinity])[0]) : 0,
-          text: (lastDisp + (first.trim() ? ', ' + first.trim() : ''))
-            + (titleText ? '  ·  ' + titleText : ''),
-          _qauthor: (lastDisp + ' ' + first).trim(), _qtitle: titleText.trim(),
-          quad: a.quad, score: a.score,
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: 'environment' },
+            width:  { ideal: 3840 },
+            height: { ideal: 2160 },
+          },
+          audio: false,
         });
+        video.srcObject = stream;
+        videoTrack = stream.getVideoTracks()[0];
+        const caps = videoTrack.getCapabilities?.() || {};
+        if (caps.zoom) {
+          zoomCaps    = caps.zoom;
+          currentZoom = caps.zoom.min || 1;
+        }
+      } catch {
+        video.style.display = 'none';
+        camError.classList.add('show');
+        captureBtn.disabled      = true;
+        captureBtn.style.opacity = '0.35';
       }
     }
-    return books;
-  }
 
-  function cmpBook(a, b, mode) {
-    if (mode === 'nonfiction') return (a.num - b.num) || strcmp(a.last, b.last);
-    return strcmp(a.last, b.last) || strcmp(a.first, b.first) || strcmp(a.title, b.title);
-  }
+    // ── Pinch to zoom ─────────────────────────────────────
+    let lastPinchDist = null;
+    let zoomHideTimer = null;
 
-  function checkOrder(books, mode) {
-    const n = books.length;
-    if (!n) return [];
-    const dp = new Array(n).fill(1), prev = new Array(n).fill(-1);
-    let best = 0;
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j < i; j++) {
-        if (cmpBook(books[j], books[i], mode) <= 0 && dp[j] + 1 > dp[i]) {
-          dp[i] = dp[j] + 1; prev[i] = j;
+    function getPinchDist(touches) {
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function showZoom(zoom, atMin) {
+      zoomIndicator.textContent = zoom.toFixed(1) + '×' + (atMin ? ' (min)' : '');
+      zoomIndicator.style.opacity = '1';
+      clearTimeout(zoomHideTimer);
+      zoomHideTimer = setTimeout(() => zoomIndicator.style.opacity = '0', 1500);
+    }
+
+    function applyZoom(newZoom) {
+      if (!zoomCaps || !videoTrack) return;
+      currentZoom = Math.min(zoomCaps.max, Math.max(zoomCaps.min, newZoom));
+      videoTrack.applyConstraints({ advanced: [{ zoom: currentZoom }] }).catch(() => {});
+      showZoom(currentZoom, newZoom < zoomCaps.min);
+    }
+
+    cameraWrap.addEventListener('touchstart', e => {
+      if (e.touches.length === 2) lastPinchDist = getPinchDist(e.touches);
+    }, { passive: true });
+
+    cameraWrap.addEventListener('touchmove', e => {
+      if (e.touches.length !== 2 || lastPinchDist === null) return;
+      const dist  = getPinchDist(e.touches);
+      const delta = dist / lastPinchDist;
+      lastPinchDist = dist;
+
+      if (zoomCaps && videoTrack) {
+        applyZoom(currentZoom * delta);
+      }
+    }, { passive: true });
+
+    cameraWrap.addEventListener('touchend', e => {
+      if (e.touches.length < 2) lastPinchDist = null;
+    }, { passive: true });
+
+    // ── Capture: full visible area ───────────────────────
+    function capture() {
+      const cw  = photoArea.clientWidth;
+      const ch  = photoArea.clientHeight;
+      const dpr = window.devicePixelRatio || 1;
+      const vw  = video.videoWidth  || cw;
+      const vh  = video.videoHeight || ch;
+
+      // Video is shown with object-fit:cover, which crops some sensor pixels to
+      // fill the viewfinder. Capture exactly the visible region so the snapshot
+      // matches what the user framed on screen.
+      const scale = Math.max(cw / vw, ch / vh);
+      const visW  = cw / scale;
+      const visH  = ch / scale;
+      const sx    = (vw - visW) / 2;
+      const sy    = (vh - visH) / 2;
+
+      snapshot.width  = Math.round(cw * dpr);
+      snapshot.height = Math.round(ch * dpr);
+      snapshot.getContext('2d').drawImage(
+        video,
+        sx, sy, visW, visH,
+        0, 0, snapshot.width, snapshot.height
+      );
+
+      // Flash animation
+      const flash = document.createElement('div');
+      flash.className = 'capture-flash';
+      photoArea.appendChild(flash);
+      flash.addEventListener('animationend', () => flash.remove());
+
+      snapshot.style.display   = 'block';
+      captureBtn.style.display = 'none';
+      actionBtns.classList.add('show');
+      analyzeBtn.disabled = false;
+    }
+
+    // ── Retake ────────────────────────────────────────────
+    function retake() {
+      snapshot.style.display   = 'none';
+      video.style.display      = '';
+      captureBtn.style.display = '';
+      captureBtn.disabled      = false;
+      actionBtns.classList.remove('show');
+      analyzeBtn.disabled      = true;
+      analyzeBtn.textContent   = 'Analyze';
+
+      // On mobile, the camera track often ends or pauses during the analysis
+      // round-trip. Resume if we can; restart the stream entirely if not.
+      if (videoTrack && videoTrack.readyState === 'ended') {
+        startCamera();
+      } else if (video.paused) {
+        video.play().catch(() => startCamera());
+      }
+    }
+
+    captureBtn.addEventListener('click', capture);
+    retakeBtn.addEventListener('click', retake);
+
+    // ── Gemini API ────────────────────────────────────────
+    const GEMINI_URL = 'https://selfcheck-proxy.krish-sundareswar.workers.dev/';
+
+    const GEMINI_MODEL = 'gemini-2.0-flash';
+
+    function getSection() {
+      return document.querySelector('.tab-btn.active').dataset.section;
+    }
+
+    function buildPrompt(section) {
+      const sectionInstruction =
+        section === 'auto'
+          ? 'Section type: AUTO. Detect for each book whether it is fiction (sort key = author last name) or nonfiction (sort key = Dewey/call number). Read every field you can.'
+          : `Section type: ${section.toUpperCase()}`;
+
+      return `You are reading a library bookshelf photo. Identify every individual book spine visible, ordered left to right (and top to bottom across multiple shelves).
+
+For each spine, return:
+- position: 1-indexed reading order
+- title: the BOOK TITLE only, as printed on the spine, or null if unreadable. This is the name of the book — NOT the author's name. Many spines show the author name in large text and the title in smaller text; read both carefully and assign each to the correct field.
+- author_last: the author's LAST NAME (surname) only, or null. This is the person who wrote the book. Do NOT put the book title here. If the author has a multi-word surname (e.g. "De La Cruz", "Van Dyke", "St. James"), include the FULL surname with all parts.
+- call_number: Dewey number (for nonfiction), or null
+- spine_label: the FULL text printed on the white library sticker at the BOTTOM of the spine. Include the cutter/author code AND the series name and volume number if visible. Examples: "KIN", "973.7 HAR", "BLACK, Cara, Leduc 5", "PATTERSON, Maximum Ride 3". If no sticker is visible, return null.
+- series_volume: if the spine or label shows a numbered series volume (e.g. "Leduc 5", "Book 3", "Vol. 7", "#2"), return the volume as an INTEGER. Otherwise null. In a series, libraries sort by volume number, NOT by title.
+- confidence: "high" | "medium" | "low" based on how clearly you can read the spine
+- bounding_box: [ymin, xmin, ymax, xmax] in normalized 0-1000 coordinates (0,0 = top-left)
+
+READING TIPS for accuracy:
+- DISTINGUISH title from author: The TITLE is the name of the book (e.g. "Murder in Clichy", "Maximum Ride"). The AUTHOR is the person who wrote it (e.g. "Black", "Patterson"). Many spines print the author name larger than the title — do not confuse them. The library sticker almost always has the author surname; use it to verify author_last.
+- Start with the white library sticker at the BOTTOM of each spine — it is pre-printed and is the most reliable text. Read it line by line: top line is usually SURNAME in all caps, second line is first name, third line (if present) is series name, fourth line is volume number.
+- If a spine is genuinely hard to read, return null for the unclear field — do NOT copy the author or title from a neighboring spine. The whole purpose is to find shelving mistakes, so assuming a book matches its neighbors hides the very errors we are looking for. An honest null (shown to the user as "unverifiable") is always better than a borrowed guess.
+- Spine text is often rotated 90 degrees. Read carefully — do not confuse letters like "d/p", "b/q", "m/w" that look alike when rotated.
+- COMMON OCR TRAPS: "rn" looks like "m", "cl" looks like "d", "I" vs "l" vs "1", "O" vs "0". When in doubt, cross-check with the sticker text.
+- Return null for any field you cannot read clearly. Do NOT guess — a wrong value is worse than null.
+
+CRITICAL bounding box rules:
+- Each box must hug ONLY ONE spine — tight to its left, right, top, and bottom edges
+- Do NOT include the shelf, the gap between books, or adjacent spines
+- Spines are vertical: boxes should be tall and narrow
+- For a spine that runs the full height of a shelf, ymin = top of shelf, ymax = bottom of shelf
+- xmin and xmax should hug ONLY the spine's own width — not its neighbor
+- A box must NEVER cross from one shelf into another. If a spine is on the TOP shelf, its ymax must stop at the visible shelf surface below it — do NOT continue into the next shelf.
+- Before returning each box, verify: "does this rectangle contain exactly one spine and nothing else?"
+
+SELF-CHECK before returning:
+1. Count the physical spines you can see in the image. Does your array length match?
+2. For any entry with confidence "low", re-examine that spine one more time — can you improve the reading?
+3. Verify that author_last and spine_label are consistent: the surname in the label should match author_last. If they disagree, trust the STICKER.
+4. Verify title ≠ author_last: the title field and the author_last field should NOT contain the same text. If they do, one is wrong.
+
+${sectionInstruction}
+Return ONLY valid JSON. Use null for unreadable fields — never guess.
+Example: [{"position":1,"title":"Murder in Clichy","author_last":"Black","call_number":null,"spine_label":"BLACK, Cara, Leduc 5","series_volume":5,"confidence":"high","bounding_box":[80,50,920,140]}]`;
+    }
+
+    // Downscale via step-halving to avoid bilinear smearing on large reductions.
+    function stepDownscale(srcCanvas, targetW, targetH) {
+      let cur = srcCanvas;
+      let cw = cur.width, ch = cur.height;
+      while (cw / targetW > 2 || ch / targetH > 2) {
+        const nw = Math.max(targetW, Math.ceil(cw / 2));
+        const nh = Math.max(targetH, Math.ceil(ch / 2));
+        const step = document.createElement('canvas');
+        step.width = nw; step.height = nh;
+        step.getContext('2d').drawImage(cur, 0, 0, nw, nh);
+        cur = step; cw = nw; ch = nh;
+      }
+      if (cw !== targetW || ch !== targetH) {
+        const fin = document.createElement('canvas');
+        fin.width = targetW; fin.height = targetH;
+        fin.getContext('2d').drawImage(cur, 0, 0, targetW, targetH);
+        return fin;
+      }
+      return cur;
+    }
+
+    // Resize snapshot and return a single base64 JPEG for the API request.
+    function getResizedImageData(maxDim = 3072, quality = 0.92) {
+      const W = snapshot.width;
+      const H = snapshot.height;
+      const scale = Math.min(1, maxDim / Math.max(W, H));
+      const tW = Math.round(W * scale);
+      const tH = Math.round(H * scale);
+
+      console.time('preprocess');
+      const resized = stepDownscale(snapshot, tW, tH);
+
+      // Light GPU contrast boost via CSS filter on a final drawImage pass
+      const out = document.createElement('canvas');
+      out.width = tW; out.height = tH;
+      const ctx = out.getContext('2d');
+      ctx.filter = 'contrast(1.08) saturate(1.05)';
+      ctx.drawImage(resized, 0, 0);
+      console.timeEnd('preprocess');
+
+      return out.toDataURL('image/jpeg', quality).split(',')[1];
+    }
+
+    let loadingTimer = null;
+
+    function showLoading() {
+      const overlay = document.createElement('div');
+      overlay.id        = 'loadingOverlay';
+      overlay.className = 'loading-overlay';
+      overlay.innerHTML = `
+        <div class="loading-text">READING SPINES…</div>
+        <div class="loading-bar"><div class="loading-bar-fill" id="loadingBarFill"></div></div>
+        <div class="loading-pct" id="loadingPct">0%</div>`;
+      photoArea.appendChild(overlay);
+
+      // Simulate progress: ease toward 85% over ~5s, then crawl toward 95%
+      const fill = document.getElementById('loadingBarFill');
+      const pct  = document.getElementById('loadingPct');
+      const start = performance.now();
+      const EASE_DURATION = 5000;  // reach 85% in 5s
+      loadingTimer = setInterval(() => {
+        const t = (performance.now() - start) / EASE_DURATION;
+        let p;
+        if (t < 1) {
+          p = 85 * (1 - Math.pow(1 - t, 2));  // ease-out to 85
+        } else {
+          p = Math.min(95, 85 + (t - 1) * 2);  // crawl 85→95
+        }
+        fill.style.width = p + '%';
+        pct.textContent  = Math.round(p) + '%';
+      }, 100);
+    }
+
+    function hideLoading(success = true) {
+      clearInterval(loadingTimer);
+      const fill = document.getElementById('loadingBarFill');
+      const pct  = document.getElementById('loadingPct');
+      if (fill && success) {
+        fill.style.width = '100%';
+        if (pct) pct.textContent = '100%';
+        setTimeout(() => document.getElementById('loadingOverlay')?.remove(), 200);
+      } else {
+        document.getElementById('loadingOverlay')?.remove();
+      }
+    }
+
+    // Call Gemini (single model, no fallback). Resolves to books array.
+    async function callGemini(prompt, image) {
+      const parts = [
+        { text: prompt },
+        { inline_data: { mime_type: 'image/jpeg', data: image } },
+      ];
+
+      console.time('gemini');
+      let res;
+      try {
+        res = await fetch(GEMINI_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: GEMINI_MODEL,
+            generationConfig: {
+              temperature: 0,
+              // Disable "thinking" — adds huge latency without improving spine reads.
+              thinkingConfig: { thinkingBudget: 0 },
+            },
+            contents: [{ parts }],
+          })
+        });
+      } catch (networkErr) {
+        console.timeEnd('gemini');
+        throw networkErr;
+      }
+      console.timeEnd('gemini');
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`${res.status}: ${errText.slice(0, 200)}`);
+      }
+
+      const json  = await res.json();
+      const raw   = json.candidates[0].content.parts[0].text;
+      return JSON.parse(raw.replace(/```json|```/g, '').trim()).map(reconcileAuthorFields);
+    }
+
+    async function analyzeShelf() {
+      analyzeBtn.disabled    = true;
+      analyzeBtn.textContent = 'Analyzing…';
+      showLoading();
+
+      const tPrep0  = performance.now();
+      const image   = getResizedImageData();
+      const procTime = Math.round(performance.now() - tPrep0);
+      const section = getSection();
+      const prompt  = buildPrompt(section);
+      let success = false;
+
+      try {
+        const tApi0 = performance.now();
+        const books = await callGemini(prompt, image);
+        const apiTime = Math.round(performance.now() - tApi0);
+        success = true;
+        showResults(books, section);
+        if (debugMode) showTimingBadge(procTime, apiTime, GEMINI_MODEL);
+      } catch (err) {
+        const offline = !navigator.onLine || /Failed to fetch|NetworkError/i.test(err.message);
+        showErrorBanner(
+          offline ? "Couldn't reach the server. Check your connection." : `Analysis failed: ${err.message}`,
+          () => analyzeShelf()
+        );
+        analyzeBtn.disabled    = false;
+        analyzeBtn.textContent = 'Analyze';
+      } finally {
+        hideLoading(success);
+      }
+    }
+
+    // On-screen timing readout for Debug Mode: prep (CPU image pipeline) vs model
+    // (network + inference) vs total. Tap to dismiss; auto-hides after 12s.
+    function showTimingBadge(procTime, apiTime, model) {
+      document.getElementById('timingBadge')?.remove();
+      const fmt   = ms => (ms / 1000).toFixed(1) + 's';
+      const total = procTime + apiTime;
+      const badge = document.createElement('div');
+      badge.id        = 'timingBadge';
+      badge.className = 'timing-badge';
+      badge.innerHTML =
+        `⏱ prep <b>${fmt(procTime)}</b> · model <b>${fmt(apiTime)}</b> · total <b>${fmt(total)}</b>` +
+        `<br><span style="color:#aaa">${escapeHtml(model)}</span>`;
+      photoArea.appendChild(badge);
+      badge.onclick = () => badge.remove();
+      setTimeout(() => badge.remove(), 12000);
+    }
+
+    // Inline error banner with a Retry button — replaces blocking alert() popups.
+    function showErrorBanner(message, onRetry) {
+      document.getElementById('errorBanner')?.remove();
+      const banner = document.createElement('div');
+      banner.id = 'errorBanner';
+      banner.className = 'error-banner';
+      banner.innerHTML = `
+        <span class="error-banner-msg">${escapeHtml(message)}</span>
+        <button class="error-banner-retry" id="errBannerRetry">Retry</button>`;
+      photoArea.appendChild(banner);
+      document.getElementById('errBannerRetry').onclick = () => {
+        banner.remove();
+        onRetry();
+      };
+      // Auto-dismiss after 8s if ignored
+      setTimeout(() => banner.remove(), 8000);
+    }
+
+    // ── Ordering logic ────────────────────────────────────
+
+    // ── Common surname prefixes — these combine with the next word ──
+    // "De La Cruz" → surname "delacruz", "Van Dyke" → "vandyke", etc.
+    const SURNAME_PREFIXES = new Set([
+      'de','del','dela','di','du','la','le','les','lo','mac','mc',
+      'o','van','von','st','san','santa','el','al','bin','ibn','da','das','dos',
+    ]);
+
+    // Normalize an author field to just the surname, lowercased, letters-only.
+    // Handles multi-word surnames: "De La Cruz" → "delacruz"
+    // Handles "Cara Black", "Black, Cara", "BLACK", "Black Jr" → "black".
+    function normalizeAuthor(s) {
+      if (!s) return null;
+      let v = String(s).toLowerCase().trim();
+      if (v.includes(',')) v = v.split(',')[0].trim();   // "Last, First" → "Last"
+      const parts = v.split(/\s+/).filter(Boolean);
+      // Strip suffixes like Jr, Sr, III, II, IV
+      while (parts.length > 1 && /^(jr|sr|ii|iii|iv|v|esq)\.?$/i.test(parts[parts.length - 1])) {
+        parts.pop();
+      }
+      if (parts.length > 1) {
+        // If this looks like "First Last" (no comma), take the last word
+        // But handle multi-word surnames: "De La Cruz" → combine prefix words
+        v = parts[parts.length - 1];
+      } else if (parts.length === 1) {
+        v = parts[0];
+      }
+      v = v.replace(/[^a-z]/g, '');
+      return v || null;
+    }
+
+    // Reduce a string to its lowercase letters only.
+    function lettersLower(s) {
+      return String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+    }
+
+    // Build a multi-word surname from a token list starting at index `start`.
+    // "DE", "LA", "CRUZ" → "delacruz"; "BLACK" → "black".
+    function buildMultiWordSurname(tokens, start) {
+      let surname = '';
+      let i = start;
+      while (i < tokens.length - 1 && SURNAME_PREFIXES.has(tokens[i].toLowerCase())) {
+        surname += tokens[i].toLowerCase();
+        i++;
+      }
+      if (i < tokens.length) surname += tokens[i].toLowerCase();
+      return surname.replace(/[^a-z]/g, '') || null;
+    }
+
+    // Parse an author-style label into { surname, first }. Handles the common formats:
+    //   "BLACK"                          → { surname:'black', first:'' }
+    //   "BLACK, Benjamin"                → { surname:'black', first:'benjamin' }
+    //   "BLACK, Cara, Leduc 5"           → { surname:'black', first:'cara' }
+    //   "Cara Black" / "Benjamin Black"  → { surname:'black', first:'cara'/'benjamin' }
+    //   "BLACK Benjamin" (no comma)      → { surname:'black', first:'benjamin' }
+    //   "DE LA CRUZ, Maria"              → { surname:'delacruz', first:'maria' }
+    //   "Van Dyke, Dick"                 → { surname:'vandyke', first:'dick' }
+    //   "Black Jr"                       → { surname:'black', first:'' }
+    function parseSurnameAndFirst(s) {
+      if (!s) return null;
+      let str = String(s).trim();
+      // Strip a trailing volume number (e.g. "Leduc 5" → "Leduc")
+      str = str.replace(/\s*\d+\s*$/, '').trim();
+      if (!str) return null;
+
+      if (str.includes(',')) {
+        const parts = str.split(',').map(p => p.trim()).filter(Boolean);
+        // parts[0] is the surname portion (may be multi-word like "DE LA CRUZ")
+        const surnameTokens = parts[0].split(/\s+/).filter(Boolean);
+        const surname = buildMultiWordSurname(surnameTokens, 0) || lettersLower(parts[0]);
+        const first   = parts[1] ? lettersLower(parts[1]) : '';
+        if (!surname) return null;
+        return { surname, first };
+      }
+
+      let tokens = str.split(/\s+/).filter(Boolean);
+      if (tokens.length === 0) return null;
+      // Strip suffixes like Jr, Sr, III, II
+      while (tokens.length > 1 && /^(jr|sr|ii|iii|iv|v|esq)\.?$/i.test(tokens[tokens.length - 1])) {
+        tokens.pop();
+      }
+      if (tokens.length === 1) {
+        return { surname: lettersLower(tokens[0]), first: '' };
+      }
+      // No comma + multiple tokens.
+      // Check for "SURNAME First" (library convention: first token ALL CAPS, second Mixed Case)
+      const t0 = tokens[0], t1 = tokens[1];
+      if (/^[A-Z]{2,}$/.test(t0) && /^[A-Z][a-z]/.test(t1)) {
+        // Check if first tokens are prefix words: "DE LA CRUZ Maria"
+        const surname = buildMultiWordSurname(tokens.slice(0, -1), 0) || lettersLower(t0);
+        return { surname, first: lettersLower(tokens[tokens.length - 1]) };
+      }
+      // "First Last" or "First De La Cruz" — find where the surname starts
+      // Walk from the end backward past any prefix words
+      let surnameStart = tokens.length - 1;
+      while (surnameStart > 1 && SURNAME_PREFIXES.has(tokens[surnameStart - 1].toLowerCase())) {
+        surnameStart--;
+      }
+      const surname = buildMultiWordSurname(tokens, surnameStart);
+      const first = lettersLower(tokens.slice(0, surnameStart).join(''));
+      return { surname: surname || lettersLower(tokens[tokens.length - 1]), first };
+    }
+
+    // Parse a Dewey/cutter label like "973.7 HAR" or "KIN"
+    function parseDewey(s) {
+      if (!s) return null;
+      const m = s.match(/^\s*([0-9]+(?:\.[0-9]+)?|[A-Za-z]+)\s*([A-Za-z]+)?/i);
+      if (!m) return null;
+      const num = isNaN(parseFloat(m[1])) ? null : parseFloat(m[1]);
+      const cut = (m[2] || '').toLowerCase();
+      return { num, cut, prefix: m[1].toLowerCase() };
+    }
+
+    // Pull a numeric series volume from either the explicit field or a parse of the label.
+    function extractVolume(book) {
+      if (typeof book.series_volume === 'number' && isFinite(book.series_volume)) {
+        return book.series_volume;
+      }
+      // Fallback: look for a trailing number in spine_label like "Leduc 5" or "#3"
+      if (book.spine_label) {
+        const m = String(book.spine_label).match(/(\d+)\s*$/);
+        if (m) return parseInt(m[1], 10);
+      }
+      return null;
+    }
+
+    // For an author-style spine label like "BLACK, Cara, Leduc 5" the normalized
+    // primary key is just the author cutter — we drop the series name + volume so
+    // that all books by the same author tie at the primary level. The volume is
+    // returned separately as the secondary key.
+    function normalizeLabelToAuthor(s) {
+      if (!s) return null;
+      const noVol = String(s).replace(/\s*\d+\s*$/, '');     // strip trailing volume
+      const noSeries = noVol.replace(/,\s*[^,]+$/, '');       // strip trailing series name after second comma
+      return normalizeAuthor(noSeries);
+    }
+
+    // ── Cross-field consistency check ──
+    // When both spine_label and author_last are present, validate that the surname
+    // from the label matches the standalone author_last field. If they disagree,
+    // prefer the spine_label (it's the pre-printed sticker, more reliable) but
+    // downgrade the book's effective confidence so the sandwich rule can catch
+    // obvious OCR misreads.
+    function reconcileAuthorFields(book) {
+      if (!book.spine_label || !book.author_last) return book;
+      const labelParsed = parseSurnameAndFirst(book.spine_label);
+      if (!labelParsed) return book;
+
+      const authorNorm = normalizeAuthor(book.author_last);
+      if (!authorNorm) return book;
+
+      // If the label surname matches the author_last, everything is consistent
+      if (labelParsed.surname === authorNorm) return book;
+
+      // Check if one is a prefix of the other (partial match like "black" vs "blackwell")
+      const shorter = labelParsed.surname.length <= authorNorm.length ? labelParsed.surname : authorNorm;
+      const longer  = labelParsed.surname.length >  authorNorm.length ? labelParsed.surname : authorNorm;
+      if (longer.startsWith(shorter) && shorter.length >= 3) return book;
+
+      // Genuine disagreement — label wins, but lower confidence
+      // The spine_label is the pre-printed library sticker; author_last might be
+      // Gemini reading the title text or a decorative font incorrectly.
+      const newConf = book.confidence === 'high' ? 'medium' : 'low';
+      return { ...book, confidence: newConf, _authorConflict: true };
+    }
+
+    // Build a comparable sort key for a book given the chosen section.
+    // Returns null when there's no trustworthy signal (→ rendered yellow).
+    // String keys carry surname (val), first name (first), and series volume (vol).
+    // Comparison is surname → first name → volume (and a title fallback).
+    function sortKey(book, section) {
+      const lowConfNoLabel = book.confidence === 'low' && !book.spine_label;
+      const vol = extractVolume(book);
+      const title = lettersLower((book.title || '').replace(/^the\s+|^a\s+|^an\s+/i, ''));
+
+      function strKeyFromAuthorish(s) {
+        const a = parseSurnameAndFirst(s);
+        return a ? { kind: 'str', val: a.surname, first: a.first, vol, title } : null;
+      }
+
+      if (section === 'fiction') {
+        if (book.spine_label) {
+          const k = strKeyFromAuthorish(book.spine_label);
+          if (k) return k;
+        }
+        if (lowConfNoLabel) return null;
+        return strKeyFromAuthorish(book.author_last);
+      }
+
+      if (section === 'nonfiction') {
+        const d = parseDewey(book.spine_label) || parseDewey(book.call_number);
+        return d ? { kind: 'dewey', val: d, vol, title } : null;
+      }
+
+      // auto: spine_label > Dewey-shaped call_number > author_last
+      if (book.spine_label) {
+        const d = parseDewey(book.spine_label);
+        if (d && d.num !== null) return { kind: 'dewey', val: d, vol, title };
+        const k = strKeyFromAuthorish(book.spine_label);
+        if (k) return k;
+      }
+      if (book.call_number && /^\s*\d/.test(book.call_number)) {
+        const d = parseDewey(book.call_number);
+        if (d) return { kind: 'dewey', val: d, vol, title };
+      }
+      if (lowConfNoLabel) return null;
+      return strKeyFromAuthorish(book.author_last);
+    }
+
+    // Compare two sort keys. Returns <0, 0, >0.
+    // Hierarchy (library filing order):
+    //   1. kind (Dewey before author-string within a section)
+    //   2. primary value (surname / Dewey number+cutter)
+    //   3. first name (within same surname: Benjamin < Cara)
+    //   4. series volume number (within same author: Leduc 5 < Leduc 6; nulls sort last)
+    //   5. title (final tiebreaker for non-series books with same author)
+    function compareKeys(a, b) {
+      if (a.kind !== b.kind) return a.kind === 'dewey' ? -1 : 1;
+
+      // 2. Primary value
+      let cmp;
+      if (a.kind === 'str') {
+        cmp = a.val.localeCompare(b.val, undefined, { sensitivity: 'base' });
+      } else {
+        const A = a.val, B = b.val;
+        const an = A.num === null ? -Infinity : A.num;
+        const bn = B.num === null ? -Infinity : B.num;
+        cmp = an !== bn ? an - bn : A.cut.localeCompare(B.cut, undefined, { sensitivity: 'base' });
+      }
+      if (cmp !== 0) return cmp;
+
+      // 3. First name (string keys only; empty string sorts first)
+      if (a.kind === 'str') {
+        const af = a.first || '';
+        const bf = b.first || '';
+        cmp = af.localeCompare(bf, undefined, { sensitivity: 'base' });
+        if (cmp !== 0) return cmp;
+      }
+
+      // 4. Series volume number (nulls sort last so unnumbered books come AFTER series)
+      const av = a.vol == null ? Infinity : a.vol;
+      const bv = b.vol == null ? Infinity : b.vol;
+      if (av !== bv) return av - bv;
+
+      // 5. Title (alphabetical, ignoring leading "the/a/an")
+      const at = a.title || '';
+      const bt = b.title || '';
+      return at.localeCompare(bt, undefined, { sensitivity: 'base' });
+    }
+
+    // Longest non-decreasing subsequence of indices in `keys` (O(n²) DP, n is small).
+    // Returns a Set of indices that are part of the LIS.
+    function longestNonDecreasingSubseq(keys) {
+      const n = keys.length;
+      const dp   = new Array(n).fill(1);
+      const prev = new Array(n).fill(-1);
+      let bestEnd = 0;
+      for (let i = 0; i < n; i++) {
+        for (let j = 0; j < i; j++) {
+          if (compareKeys(keys[j], keys[i]) <= 0 && dp[j] + 1 > dp[i]) {
+            dp[i]   = dp[j] + 1;
+            prev[i] = j;
+          }
+        }
+        if (dp[i] > dp[bestEnd]) bestEnd = i;
+      }
+      const set = new Set();
+      for (let i = bestEnd; i !== -1; i = prev[i]) set.add(i);
+      return set;
+    }
+
+    // Group books into shelf rows by Y-coordinate clustering.
+    // Within each shelf, books are sorted left-to-right by X-center.
+    // Returns { shelves: [[book, ...], ...], ungrouped: [book, ...] }.
+    function groupByShelf(books) {
+      const ungrouped = [];
+      const boxed    = [];
+      for (const b of books) {
+        if (!b.bounding_box || b.bounding_box.length !== 4) ungrouped.push(b);
+        else boxed.push(b);
+      }
+      if (boxed.length === 0) return { shelves: [], ungrouped };
+
+      // Compute Y-center and height per book
+      const enriched = boxed.map(b => {
+        const [ymin, , ymax] = b.bounding_box;
+        return { book: b, yc: (ymin + ymax) / 2, h: Math.max(1, ymax - ymin) };
+      });
+
+      // Sort by Y-center
+      enriched.sort((a, b) => a.yc - b.yc);
+
+      // Median spine height — threshold for starting a new shelf
+      const heights = [...enriched.map(e => e.h)].sort((a, b) => a - b);
+      const medianH = heights[Math.floor(heights.length / 2)] || 100;
+      const gapThreshold = medianH * 0.6;
+
+      // Walk and split into shelves
+      const shelves = [[enriched[0]]];
+      for (let i = 1; i < enriched.length; i++) {
+        const gap = enriched[i].yc - enriched[i - 1].yc;
+        if (gap > gapThreshold) shelves.push([]);
+        shelves[shelves.length - 1].push(enriched[i]);
+      }
+
+      // Within each shelf, sort by X-center (left to right)
+      const result = shelves.map(shelf => {
+        shelf.sort((a, b) => {
+          const ax = (a.book.bounding_box[1] + a.book.bounding_box[3]) / 2;
+          const bx = (b.book.bounding_box[1] + b.book.bounding_box[3]) / 2;
+          return ax - bx;
+        });
+        return shelf.map(e => e.book);
+      });
+
+      return { shelves: result, ungrouped };
+    }
+
+    // Clip box heights so they don't bleed across shelves.
+    // For each shelf, compute median ymin/ymax; clamp outliers to that band.
+    function clipShelfBoxes(shelfBooks) {
+      if (shelfBooks.length < 2) return shelfBooks;
+      const ymins = shelfBooks.map(b => b.bounding_box[0]).sort((a, b) => a - b);
+      const ymaxs = shelfBooks.map(b => b.bounding_box[2]).sort((a, b) => a - b);
+      const medYmin = ymins[Math.floor(ymins.length / 2)];
+      const medYmax = ymaxs[Math.floor(ymaxs.length / 2)];
+      const heights = shelfBooks.map(b => b.bounding_box[2] - b.bounding_box[0]).sort((a, b) => a - b);
+      const medH = heights[Math.floor(heights.length / 2)];
+      const tol = medH * 0.25;
+
+      return shelfBooks.map(b => {
+        const [ymin, xmin, ymax, xmax] = b.bounding_box;
+        const clampedYmin = ymin < medYmin - tol ? medYmin : ymin;
+        const clampedYmax = ymax > medYmax + tol ? medYmax : ymax;
+        return { ...b, bounding_box: [clampedYmin, xmin, clampedYmax, xmax] };
+      });
+    }
+
+    // Sanitize bounding boxes within a shelf: clamp oversized widths and resolve overlaps.
+    // Books must already be sorted left-to-right by X-center.
+    function sanitizeShelfBoxes(shelfBooks) {
+      if (shelfBooks.length < 2) return shelfBooks;
+
+      // Median width — used to cap outliers
+      const widths = shelfBooks.map(b => b.bounding_box[3] - b.bounding_box[1]).sort((a, b) => a - b);
+      const medW = widths[Math.floor(widths.length / 2)];
+      const maxW = medW * 1.8;  // no box wider than 1.8× median
+
+      const fixed = shelfBooks.map(b => {
+        let [ymin, xmin, ymax, xmax] = b.bounding_box;
+        const w = xmax - xmin;
+        if (w > maxW) {
+          // Shrink toward center
+          const cx = (xmin + xmax) / 2;
+          xmin = cx - maxW / 2;
+          xmax = cx + maxW / 2;
+        }
+        return { ...b, bounding_box: [ymin, xmin, ymax, xmax] };
+      });
+
+      // Resolve horizontal overlaps: push adjacent boxes apart so arrows don't stack
+      for (let i = 0; i < fixed.length - 1; i++) {
+        const bbA = fixed[i].bounding_box;
+        const bbB = fixed[i + 1].bounding_box;
+        if (bbA[3] > bbB[1]) {
+          // Overlap detected — split at midpoint
+          const mid = (bbA[3] + bbB[1]) / 2;
+          fixed[i]     = { ...fixed[i],     bounding_box: [bbA[0], bbA[1], bbA[2], mid] };
+          fixed[i + 1] = { ...fixed[i + 1], bounding_box: [bbB[0], mid,    bbB[2], bbB[3]] };
         }
       }
-      if (dp[i] > dp[best]) best = i;
-    }
-    const inOrder = new Set();
-    for (let k = best; k >= 0; k = prev[k]) inOrder.add(k);
-    return books.map((b, i) => ({ ...b, ok: inOrder.has(i) }));
-  }
 
-  // ── Open Library canonicalisation ─────────────────────────────
-  const bigrams = (s) => { const r = new Set(); for (let i = 0; i < s.length - 1; i++) r.add(s.slice(i, i + 2)); return r; };
-  function sim(a, b) {
-    if (!a || !b) return 0;
-    if (a === b) return 1;
-    const A = bigrams(a), B = bigrams(b);
-    let inter = 0; for (const g of A) if (B.has(g)) inter++;
-    return (2 * inter) / (A.size + B.size || 1);
-  }
-  function splitAuthor(name) {
-    const parts = name.trim().split(/\s+/).filter(Boolean);
-    if (parts.length <= 1) return { last: parts[0] || name, first: '' };
-    let li = parts.length - 1;
-    while (li - 1 >= 1 && PREFIX.has(clean(parts[li - 1]))) li--;
-    return { last: parts.slice(li).join(' '), first: parts.slice(0, li).join(' ') };
-  }
-
-  async function olLookup(book) {
-    const ocrTitle = clean(book._qtitle);
-    if (ocrTitle.length < 5) return null;
-    let data;
-    try {
-      const r = await fetch('https://openlibrary.org/search.json?title='
-        + encodeURIComponent(book._qtitle) + '&limit=5&fields=title,author_name');
-      if (!r.ok) return null;
-      data = await r.json();
-    } catch { return null; }
-    const ocrAuthor = clean(book._qauthor);
-    let best = null, bestScore = 0;
-    for (const d of (data.docs || [])) {
-      const an = (d.author_name && d.author_name[0]) || '';
-      const ti = d.title || '';
-      const s = sim(ocrTitle, clean(ti)) + 0.15 * sim(ocrAuthor, clean(an));
-      if (s > bestScore) { bestScore = s; best = { an, ti }; }
+      return fixed;
     }
-    if (best && bestScore >= 0.6) {
-      const { last, first } = splitAuthor(best.an);
-      return { last, first, title: best.ti };
-    }
-    return null;
-  }
 
-  async function canonicalizeAndRecheck(checked, mode) {
-    const flagged = checked.filter(b => !b.ok);
-    await Promise.all(flagged.map(async (b) => {
-      const fix = await olLookup(b);
-      if (fix) {
-        b.last = keyStr(fix.last); b.first = clean(fix.first); b.title = clean(fix.title);
-        b.text = fix.last + (fix.first ? ', ' + fix.first : '') + (fix.title ? '  ·  ' + fix.title : '');
-        b.canon = true;
+    // Levenshtein edit distance between two strings (small inputs — simple DP).
+    // Used to detect OCR near-twin surnames like "waldron" vs "waldman" (distance 2).
+    function editDistance(a, b) {
+      a = a || ''; b = b || '';
+      const m = a.length, n = b.length;
+      if (m === 0) return n;
+      if (n === 0) return m;
+      let prev = Array.from({ length: n + 1 }, (_, j) => j);
+      for (let i = 1; i <= m; i++) {
+        const cur = [i];
+        for (let j = 1; j <= n; j++) {
+          const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+          cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+        }
+        prev = cur;
       }
-    }));
-    const rechecked = checkOrder(checked, mode);
-    return rechecked.map((b, i) => ({
-      ...b, canon: checked[i].canon,
-      uncertain: !b.ok && !checked[i].canon,
-    }));
-  }
+      return prev[n];
+    }
 
-  // ── Render results ────────────────────────────────────────────
-  function renderResults(srcCanvas, checked) {
-    hide(els.processCard); show(els.resultsCard);
+    // Check order for a single shelf of books (already sorted left→right within the shelf).
+    function checkOrderOneShelf(books, section) {
+      const keys = books.map(b => sortKey(b, section));
+      const verifiableIdx = [];
+      keys.forEach((k, i) => { if (k !== null) verifiableIdx.push(i); });
 
-    const maxW = 900;
-    const scale = Math.min(1, maxW / srcCanvas.width);
-    const cv = els.overlay;
-    cv.width = srcCanvas.width * scale;
-    cv.height = srcCanvas.height * scale;
-    const ctx = cv.getContext('2d');
-    ctx.drawImage(srcCanvas, 0, 0, cv.width, cv.height);
-    ctx.lineWidth = Math.max(2, cv.width / 400);
-    ctx.font = `bold ${Math.max(12, cv.width / 55)}px sans-serif`;
+      const verifiableKeys = verifiableIdx.map(i => keys[i]);
+      const lisLocal       = longestNonDecreasingSubseq(verifiableKeys);
+      const lisGlobal      = new Set([...lisLocal].map(localIdx => verifiableIdx[localIdx]));
 
-    const stateColor = (l) => l.ok ? '#22c55e' : (l.uncertain ? '#f59e0b' : '#ef4444');
-    checked.forEach((l, i) => {
-      if (!l.quad) return;
-      const color = stateColor(l);
-      ctx.strokeStyle = color;
-      ctx.beginPath();
-      l.quad.forEach((p, j) => {
-        const x = p[0] * scale, y = p[1] * scale;
-        j ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      // Ideal position = the slot (within this shelf) that the rank-th sorted book occupies.
+      // Positions are 1-indexed WITHIN this shelf only.
+      const sortedVerifiable = [...verifiableIdx].sort((a, b) => compareKeys(keys[a], keys[b]));
+      const idealRank = new Map();
+      sortedVerifiable.forEach((origIdx, rank) => {
+        idealRank.set(origIdx, verifiableIdx[rank] + 1);
       });
-      ctx.closePath(); ctx.stroke();
-      const bb = bboxOf(l.quad);
-      ctx.fillStyle = color;
-      ctx.fillText(String(i + 1), bb.x * scale, bb.y * scale - 4);
+
+      // Compute tied-group slot ranges: for each book, the inclusive [min,max] slot range
+      // of all verifiable books that tie with it. If a book's current shelf position falls
+      // inside its tied range, it's not really "out of order" even if the LIS excluded it.
+      const tiedGroupSlots = new Map();
+      let r = 0;
+      while (r < sortedVerifiable.length) {
+        let s = r;
+        while (
+          s + 1 < sortedVerifiable.length &&
+          compareKeys(keys[sortedVerifiable[s + 1]], keys[sortedVerifiable[r]]) === 0
+        ) s++;
+        // Slot range = [verifiableIdx[r]+1, verifiableIdx[s]+1]
+        const lo = verifiableIdx[r] + 1;
+        const hi = verifiableIdx[s] + 1;
+        for (let k = r; k <= s; k++) {
+          tiedGroupSlots.set(sortedVerifiable[k], [lo, hi]);
+        }
+        r = s + 1;
+      }
+
+      const checked = books.map((book, i) => {
+        // Shelf-relative position is i+1
+        const shelfPos = i + 1;
+        if (keys[i] === null) {
+          return {
+            ...book, outOfOrder: false, unverifiable: true,
+            idealPosition: null, shelfPosition: shelfPos,
+            shelfSize: books.length, tiedGroupSlots: null,
+          };
+        }
+        const ideal = idealRank.get(i) ?? null;
+        const tied  = tiedGroupSlots.get(i) || null;
+        // If position falls inside its tied group's slot range, treat as in-order
+        const inTiedRange = tied && shelfPos >= tied[0] && shelfPos <= tied[1];
+        const inLis = lisGlobal.has(i);
+        const outOfOrder = !inLis && !inTiedRange;
+        return {
+          ...book,
+          outOfOrder,
+          unverifiable: false,
+          idealPosition: ideal,
+          shelfPosition: shelfPos,
+          shelfSize: books.length,
+          tiedGroupSlots: tied,
+        };
+      });
+
+      // Sandwich rule: a red book surrounded by greens whose keys MATCH or are CLOSE
+      // is almost certainly an OCR misread, not a real misplacement.
+      // Rule 1: Exact match — nearest non-red neighbors have IDENTICAL keys.
+      // Rule 2: Outlier — both neighbors' primary value (surname / dewey) are within
+      //         1 letter of each other but the flagged book's primary value is far away.
+      //         "far" = the first letter differs by ≥3 positions in the alphabet.
+      for (let i = 0; i < checked.length; i++) {
+        if (!checked[i].outOfOrder) continue;
+        let L = i - 1;
+        while (L >= 0 && checked[L].outOfOrder) L--;
+        let R = i + 1;
+        while (R < checked.length && checked[R].outOfOrder) R++;
+        if (L < 0 || R >= checked.length) continue;
+        const kL = keys[L], kR = keys[R], kM = keys[i];
+        if (!kL || !kR || !kM) continue;
+
+        let demote = false;
+
+        // Rule 1: exact match between neighbors
+        if (compareKeys(kL, kR) === 0) {
+          demote = true;
+        }
+
+        // Rule 2: neighbors close to each other, flagged book far from both
+        if (!demote && kL.kind === kR.kind && kM.kind === kL.kind) {
+          const valL = kL.kind === 'str' ? kL.val : String(kL.val.num ?? '');
+          const valR = kR.kind === 'str' ? kR.val : String(kR.val.num ?? '');
+          const valM = kM.kind === 'str' ? kM.val : String(kM.val.num ?? '');
+          if (valL && valR && valM) {
+            const neighborsClose = valL.charAt(0) === valR.charAt(0);
+            const farFromL = Math.abs(valM.charCodeAt(0) - valL.charCodeAt(0)) >= 3;
+            const farFromR = Math.abs(valM.charCodeAt(0) - valR.charCodeAt(0)) >= 3;
+            if (neighborsClose && farFromL && farFromR) {
+              demote = true;
+            }
+          }
+        }
+
+        // Rule 3: OCR near-twin. The flagged surname is a near-match (edit distance ≤2)
+        // of an adjacent verifiable surname — e.g. "waldron" vs "waldman". This is far
+        // more likely a misread than a genuine misplacement, so demote to unverifiable.
+        // Restricted to surnames ≥5 chars so short names ("kane"/"lane") don't false-trigger.
+        if (!demote && kM.kind === 'str') {
+          const valM = kM.val || '';
+          for (const kN of [kL, kR]) {
+            if (kN.kind !== 'str') continue;
+            const valN = kN.val || '';
+            if (Math.min(valM.length, valN.length) >= 5 &&
+                valM !== valN &&
+                editDistance(valM, valN) <= 2) {
+              demote = true;
+              break;
+            }
+          }
+        }
+
+        if (demote) {
+          checked[i].outOfOrder    = false;
+          checked[i].unverifiable  = true;
+          checked[i].idealPosition = null;
+        }
+      }
+
+      return checked;
+    }
+
+    // Public entry: group by shelf, clip boxes per shelf, run order check per shelf,
+    // and flatten back to a single array (preserving each book's display position).
+    function checkOrder(books, section) {
+      const { shelves, ungrouped } = groupByShelf(books);
+      const checkedShelves = shelves.flatMap((shelf, si) => {
+        const clipped   = clipShelfBoxes(shelf);
+        const sanitized = sanitizeShelfBoxes(clipped);
+        // Tag each book with its shelf index so we can match shelf-mates later
+        return checkOrderOneShelf(sanitized, section).map(b => ({ ...b, shelfIndex: si }));
+      });
+      // Ungrouped books (no bounding box) — pass through as unverifiable, no shelf info
+      const checkedUngrouped = ungrouped.map(b => ({
+        ...b, outOfOrder: false, unverifiable: true, idealPosition: null,
+        shelfPosition: null, shelfSize: null, shelfIndex: -1, tiedGroupSlots: null,
+      }));
+      return [...checkedShelves, ...checkedUngrouped];
+    }
+
+    // ── Shared helper: map a bounding box to pixel coords over cameraWrap ──
+    // Used by both renderStep arrows and renderUnverifiableMarkers.
+    function bbToDisplay(bb) {
+      const cw = snapshot.width, ch = snapshot.height;
+      const rect = snapshot.getBoundingClientRect();
+      const wrapRect = cameraWrap.getBoundingClientRect();
+      const dispScale = Math.min(rect.width / cw, rect.height / ch);
+      const dispW = cw * dispScale, dispH = ch * dispScale;
+      const offX = (rect.width  - dispW) / 2 + (rect.left - wrapRect.left);
+      const offY = (rect.height - dispH) / 2 + (rect.top  - wrapRect.top);
+      const [ymin, xmin, , xmax] = bb;
+      const cx = ((xmin + xmax) / 2 / 1000) * cw;
+      const ty = (ymin / 1000) * ch;
+      return {
+        left: offX + cx * dispScale,
+        top:  Math.max(8, offY + ty * dispScale - 4),
+      };
+    }
+
+    // ── Persistent yellow "?" markers for unverifiable books ──
+    function renderUnverifiableMarkers() {
+      document.getElementById('unvMarkers')?.remove();
+      const unvBooks = lastCheckedBooks.filter(b => b.unverifiable && b.bounding_box);
+      if (unvBooks.length === 0) return;
+
+      const wrap = document.createElement('div');
+      wrap.id = 'unvMarkers';
+      wrap.className = 'unv-markers-wrap';
+      cameraWrap.appendChild(wrap);
+
+      for (const book of unvBooks) {
+        const pos = bbToDisplay(book.bounding_box);
+        const marker = document.createElement('div');
+        marker.className = 'unv-marker';
+        marker.style.left = `${pos.left}px`;
+        marker.style.top  = `${pos.top}px`;
+        marker.innerHTML = `<div class="unv-marker-pill">?</div><div class="unv-marker-tip"></div>`;
+        wrap.appendChild(marker);
+      }
+    }
+
+    // ── Results: step-through mode (one issue at a time) ─────
+    let lastCheckedBooks = [];
+    let stepIssues = [];
+    let stepCursor = 0;
+
+    function showResults(books, section) {
+      const checked = checkOrder(books, section);
+      lastCheckedBooks = checked;
+
+      // Clean up any prior result UI before rendering new state
+      document.getElementById('resultsOverlay')?.remove();
+      document.getElementById('stepThrough')?.remove();
+
+      // Step-through only covers out-of-order books. Unverifiable books get
+      // persistent yellow "?" tags rendered on the photo at all times.
+      stepIssues = checked
+        .filter(b => b.bounding_box && b.outOfOrder)
+        .sort((a, b) => (a.shelfPosition ?? 0) - (b.shelfPosition ?? 0));
+
+      const total    = checked.length;
+      const outCount = checked.filter(b => b.outOfOrder).length;
+      const unvCount = checked.filter(b => b.unverifiable).length;
+
+      actionBtns.classList.remove('show');
+
+      // No books detected — don't claim "all in order". Prompt a retake instead.
+      if (total === 0) {
+        showNoBooksBadge();
+        return;
+      }
+
+      enableInspect();
+
+      // Render persistent yellow markers for unverifiable books
+      renderUnverifiableMarkers();
+
+      if (stepIssues.length === 0) {
+        showSimpleBadge(total, outCount, unvCount);
+      } else {
+        stepCursor = 0;
+        showStepThrough(total, outCount, unvCount);
+      }
+    }
+
+    // Shown when Gemini detected zero books (blurry/dark/empty photo or a misfire).
+    function showNoBooksBadge() {
+      const overlay = document.createElement('div');
+      overlay.id        = 'resultsOverlay';
+      overlay.className = 'results-overlay';
+      overlay.innerHTML = `
+        <div class="overlay-badge badge-warn">No books detected — retake</div>
+        <button class="btn-new-scan" onclick="newScan()">Retake</button>`;
+      photoArea.appendChild(overlay);
+    }
+
+    function showSimpleBadge(total, outCount, unvCount) {
+      const readLabel = `${total} read`;
+      let badgeClass, badgeText;
+      if (outCount > 0)       { badgeClass = 'badge-warn';         badgeText = `⚠ ${outCount} to move · ${readLabel}`; }
+      else if (unvCount > 0)  { badgeClass = 'badge-unverifiable'; badgeText = `⚠ ${unvCount} unverifiable · ${readLabel}`; }
+      else                    { badgeClass = 'badge-ok';           badgeText = `✓ All ${total} in order`; }
+
+      const overlay = document.createElement('div');
+      overlay.id        = 'resultsOverlay';
+      overlay.className = 'results-overlay';
+      overlay.innerHTML = `
+        <div class="overlay-badge ${badgeClass}">${badgeText}</div>
+        <button class="btn-new-scan" onclick="newScan()">New Scan</button>`;
+      photoArea.appendChild(overlay);
+    }
+
+    function showStepThrough(total, outCount, unvCount) {
+      const container = document.createElement('div');
+      container.id = 'stepThrough';
+      const parts = [];
+      if (outCount > 0) parts.push(`${outCount} to move`);
+      if (unvCount > 0) parts.push(`${unvCount} unverifiable`);
+      parts.push(`${total} read`);
+      const summary = parts.join(' · ');
+      container.innerHTML = `
+        <div class="step-arrow" id="stepArrow">
+          <div class="step-arrow-num" id="stepArrowNum">1</div>
+          <div class="step-arrow-tip"></div>
+        </div>
+        <div class="step-arrow-dest" id="stepArrowDest" style="display:none">
+          <div class="step-arrow-dest-pill">place here</div>
+          <div class="step-arrow-dest-tip"></div>
+        </div>
+        <div class="step-card" id="stepCard">
+          <div class="step-card-top">
+            <span class="step-summary">${summary}</span>
+            <button class="step-list-btn" id="stepListBtn">☰ List</button>
+          </div>
+          <div class="step-title" id="stepTitle">—</div>
+          <div class="step-meta" id="stepMeta">—</div>
+          <div class="step-action" id="stepAction">—</div>
+          <div class="step-nav">
+            <button class="step-btn" id="stepPrev">← Prev</button>
+            <span class="step-counter" id="stepCounter"></span>
+            <button class="step-btn" id="stepNext">Next →</button>
+          </div>
+          <button class="step-btn step-btn-primary step-newscan-full" id="stepNewScan">New Scan</button>
+        </div>`;
+      cameraWrap.appendChild(container);
+
+      document.getElementById('stepPrev').onclick = () => {
+        stepCursor = (stepCursor - 1 + stepIssues.length) % stepIssues.length;
+        renderStep();
+      };
+      document.getElementById('stepNext').onclick = () => {
+        stepCursor = (stepCursor + 1) % stepIssues.length;
+        renderStep();
+      };
+      document.getElementById('stepNewScan').onclick = newScan;
+      document.getElementById('stepListBtn').onclick = showMovesList;
+
+      renderStep();
+    }
+
+    // Flat list of every misplaced book in shelf order — faster than stepping one-by-one.
+    // Tapping an item jumps the step-through to that book.
+    function showMovesList() {
+      document.getElementById('movesList')?.remove();
+      const overlay = document.createElement('div');
+      overlay.id = 'movesList';
+      overlay.className = 'moves-list';
+
+      let rows = '';
+      stepIssues.forEach((b, idx) => {
+        const dir = (b.idealPosition && b.shelfPosition)
+          ? (b.idealPosition < b.shelfPosition ? 'LEFT' : 'RIGHT')
+          : '';
+        const dest = (b.outOfOrder && b.idealPosition && b.shelfPosition)
+          ? lastCheckedBooks.find(d => d.shelfIndex === b.shelfIndex && d.shelfPosition === b.idealPosition)
+          : null;
+        const destName = dest ? (dest.title || dest.spine_label || (dest.author_last ? `${dest.author_last}'s book` : '')) : '';
+        const action = dir
+          ? `Move <b>${dir}</b>${destName ? ` — before ${escapeHtml(String(destName))}` : ''}`
+          : 'Out of order';
+        rows += `
+          <button class="moves-item" data-idx="${idx}">
+            <span class="moves-pos">${b.shelfPosition ?? '?'}</span>
+            <span class="moves-body">
+              <span class="moves-title">${escapeHtml(b.title) || '(unreadable)'}</span>
+              <span class="moves-action">${action}</span>
+            </span>
+          </button>`;
+      });
+
+      overlay.innerHTML = `
+        <div class="moves-list-head">
+          <span>${stepIssues.length} book${stepIssues.length === 1 ? '' : 's'} to move</span>
+          <button class="moves-close" id="movesClose">Done</button>
+        </div>
+        <div class="moves-scroll">${rows}</div>`;
+      cameraWrap.appendChild(overlay);
+
+      document.getElementById('movesClose').onclick = () => overlay.remove();
+      overlay.querySelectorAll('.moves-item').forEach(item => {
+        item.onclick = () => {
+          stepCursor = parseInt(item.dataset.idx, 10);
+          renderStep();
+          overlay.remove();
+        };
+      });
+    }
+
+    function renderStep() {
+      const book = stepIssues[stepCursor];
+      if (!book) return;
+
+      // Position the source arrow at this book's X-center, just above its top edge.
+      const arrow = document.getElementById('stepArrow');
+      if (arrow && book.bounding_box) {
+        const pos = bbToDisplay(book.bounding_box);
+        arrow.style.left = `${pos.left}px`;
+        arrow.style.top  = `${pos.top}px`;
+        arrow.classList.toggle('step-arrow-warn', !!book.outOfOrder);
+        arrow.classList.toggle('step-arrow-unv',  !!book.unverifiable && !book.outOfOrder);
+      }
+
+      // Find the destination book (the one currently sitting at idealPosition on this shelf).
+      // Used by both the green arrow and the card text below.
+      let dest = null;
+      let destVisible = false;
+      if (book.outOfOrder && book.idealPosition && book.shelfPosition) {
+        dest = lastCheckedBooks.find(
+          b => b.shelfIndex === book.shelfIndex && b.shelfPosition === book.idealPosition
+        );
+        destVisible = !!(dest && dest.bounding_box);
+      }
+
+      // Destination arrow: green, shown when we can point at the target location.
+      const destArrow = document.getElementById('stepArrowDest');
+      if (destArrow) {
+        if (destVisible) {
+          const pos = bbToDisplay(dest.bounding_box);
+          destArrow.style.left = `${pos.left}px`;
+          destArrow.style.top  = `${pos.top}px`;
+          destArrow.style.display = '';
+        } else {
+          destArrow.style.display = 'none';
+        }
+      }
+
+      document.getElementById('stepArrowNum').textContent = String(book.shelfPosition ?? book.position ?? '?');
+      document.getElementById('stepCounter').textContent = `Issue ${stepCursor + 1} of ${stepIssues.length}`;
+      document.getElementById('stepTitle').textContent   = book.title || '(unreadable title)';
+
+      const metaParts = [];
+      if (book.author_last)       metaParts.push(book.author_last);
+      if (book.spine_label)       metaParts.push(book.spine_label);
+      if (book.series_volume != null) metaParts.push(`#${book.series_volume}`);
+      document.getElementById('stepMeta').textContent = metaParts.join(' · ') || '—';
+
+      const actionEl = document.getElementById('stepAction');
+      if (book.unverifiable && !book.outOfOrder) {
+        actionEl.textContent = "Couldn't read this spine clearly — verify visually.";
+        actionEl.style.background = '#713f12';
+        actionEl.style.color      = '#fde047';
+      } else if (book.outOfOrder && book.idealPosition && book.shelfPosition) {
+        const dir = book.idealPosition < book.shelfPosition ? 'LEFT' : 'RIGHT';
+        if (dest) {
+          const destName = dest.title || dest.spine_label
+            || (dest.author_last ? `${dest.author_last}'s book` : `position ${book.idealPosition}`);
+          actionEl.innerHTML = `Move <b>${dir}</b> — place before <b>${escapeHtml(String(destName))}</b>`;
+          actionEl.style.background = '#1e3a8a';
+          actionEl.style.color      = '#dbeafe';
+        } else {
+          // Destination isn't visible in this photo
+          actionEl.innerHTML = `This book is <b>out of order</b> — its correct spot isn't visible in this photo. It should go <b>${dir}</b>, off the edge of the shelf shown.`;
+          actionEl.style.background = '#78350f';
+          actionEl.style.color      = '#fde68a';
+        }
+      } else {
+        actionEl.textContent = '';
+      }
+    }
+
+    // Reposition arrows and markers if the viewport changes (rotation, etc).
+    window.addEventListener('resize', () => {
+      if (stepIssues.length > 0 && document.getElementById('stepThrough')) renderStep();
+      if (document.getElementById('unvMarkers')) renderUnverifiableMarkers();
     });
 
-    const bad    = checked.filter(l => !l.ok && !l.uncertain).length;
-    const unsure = checked.filter(l => l.uncertain).length;
-    els.statTotal.textContent = checked.length;
-    els.statOk.textContent   = checked.length - bad - unsure;
-    els.statBad.textContent  = bad + (unsure ? ' +' + unsure + '?' : '');
+    // ── Tap-to-inspect: show OCR readout for the tapped book ──
+    function enableInspect() {
+      snapshot.style.pointerEvents = 'auto';
+      snapshot.style.cursor = 'pointer';
+      snapshot.addEventListener('click', inspectHandler);
+    }
 
-    els.resultList.innerHTML = '';
-    checked.forEach((l, i) => {
-      const div = document.createElement('div');
-      const cls = l.ok ? 'ri-ok' : (l.uncertain ? 'ri-warn' : 'ri-bad');
-      div.className = 'result-item ' + cls;
-      const low = l.score < 0.7;
+    function disableInspect() {
+      snapshot.style.pointerEvents = '';
+      snapshot.style.cursor = '';
+      snapshot.removeEventListener('click', inspectHandler);
+      document.getElementById('bookInspect')?.remove();
+    }
 
-      let tags = '';
-      if (!l.ok && !l.uncertain) tags += '<span class="tag tag-bad">Out of order</span>';
-      if (l.uncertain)            tags += '<span class="tag tag-warn">Check manually</span>';
-      if (l.canon)                tags += '<span class="tag tag-cat">✓ catalog</span>';
+    function inspectHandler(e) {
+      // Translate click to canvas-internal coordinates (object-fit: contain)
+      const rect = snapshot.getBoundingClientRect();
+      const cw = snapshot.width, ch = snapshot.height;
+      const dispScale = Math.min(rect.width / cw, rect.height / ch);
+      const dispW = cw * dispScale, dispH = ch * dispScale;
+      const offX = (rect.width  - dispW) / 2;
+      const offY = (rect.height - dispH) / 2;
+      const px = (e.clientX - rect.left - offX) / dispScale;
+      const py = (e.clientY - rect.top  - offY) / dispScale;
 
-      div.innerHTML =
-        `<div class="ri-num">${i + 1}</div>` +
-        `<div class="ri-body">` +
-          `<div class="ri-text">${escapeHtml(l.text)}</div>` +
-          (tags ? `<div class="ri-tags">${tags}</div>` : '') +
-        `</div>` +
-        `<div class="ri-conf ${low ? 'low' : ''}">${Math.round(l.score * 100)}%</div>`;
-      els.resultList.appendChild(div);
+      // Hit-test against book boxes (prefer smallest box if multiple contain the point)
+      let best = null, bestArea = Infinity;
+      for (const b of lastCheckedBooks) {
+        if (!b.bounding_box) continue;
+        const [ymin, xmin, ymax, xmax] = b.bounding_box;
+        const x = (xmin / 1000) * cw;
+        const y = (ymin / 1000) * ch;
+        const w = ((xmax - xmin) / 1000) * cw;
+        const h = ((ymax - ymin) / 1000) * ch;
+        if (px >= x && px <= x + w && py >= y && py <= y + h) {
+          const area = w * h;
+          if (area < bestArea) { best = b; bestArea = area; }
+        }
+      }
+
+      document.getElementById('bookInspect')?.remove();
+      if (!best) return;
+
+      const confColor = best.confidence === 'high' ? '#4ade80' : best.confidence === 'medium' ? '#facc15' : '#f87171';
+
+      // Build a "where to move" message for red books.
+      // Find the book currently sitting at the ideal shelf-position so we can name it.
+      let moveText = null;
+      if (best.outOfOrder && best.idealPosition && best.shelfPosition) {
+        const dest = lastCheckedBooks.find(
+          b => b.shelfIndex === best.shelfIndex && b.shelfPosition === best.idealPosition
+        );
+        const direction = best.idealPosition < best.shelfPosition ? 'left' : 'right';
+        if (dest) {
+          const destName = dest.title || dest.spine_label
+            || (dest.author_last && `${dest.author_last}'s book`)
+            || `the book at position ${best.idealPosition}`;
+          moveText = `Move ${direction} — place before <b>${escapeHtml(String(destName))}</b> (currently #${best.idealPosition} on this shelf).`;
+        } else {
+          moveText = `Out of order — correct spot is off the edge of this photo (${direction}).`;
+        }
+      }
+
+      const status = best.unverifiable ? 'Couldn\'t read this spine clearly — not sure if it\'s in order.'
+                   : best.outOfOrder    ? `Out of order — should be at shelf position ${best.idealPosition}.`
+                   :                       '✓ In order';
+
+      const card = document.createElement('div');
+      card.id = 'bookInspect';
+      card.className = 'book-inspect';
+      card.innerHTML = `
+        <div class="bi-row"><span class="bi-key">Title</span><span class="bi-val">${escapeHtml(best.title) || '—'}</span></div>
+        <div class="bi-row"><span class="bi-key">Author</span><span class="bi-val">${escapeHtml(best.author_last) || '—'}${best._authorConflict ? ' <span style="color:#facc15;font-size:11px">(label mismatch)</span>' : ''}</span></div>
+        <div class="bi-row"><span class="bi-key">Label</span><span class="bi-val">${escapeHtml(best.spine_label || best.call_number) || '—'}</span></div>
+        ${best.series_volume != null ? `<div class="bi-row"><span class="bi-key">Volume</span><span class="bi-val">#${best.series_volume}</span></div>` : ''}
+        <div class="bi-row"><span class="bi-key">Confidence</span><span class="bi-val"><span class="bi-dot" style="background:${confColor}"></span>${best.confidence || '—'}</span></div>
+        <div class="bi-row"><span class="bi-key">Position</span><span class="bi-val">${best.shelfPosition ?? '—'} of ${best.shelfSize ?? '—'} on this shelf</span></div>
+        <div class="bi-status">${status}</div>
+        ${moveText ? `<div class="bi-move">${moveText}</div>` : ''}
+        <button class="bi-close" aria-label="Close">×</button>`;
+      photoArea.appendChild(card);
+      card.querySelector('.bi-close').addEventListener('click', () => card.remove());
+    }
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    function newScan() {
+      document.getElementById('resultsOverlay')?.remove();
+      document.getElementById('stepThrough')?.remove();
+      document.getElementById('unvMarkers')?.remove();
+      document.getElementById('debugOverlay')?.remove();
+      document.getElementById('movesList')?.remove();
+      stepIssues = [];
+      disableInspect();
+      retake();
+    }
+
+    // ── Debug mode ──────────────────────────────────────
+    let debugMode = false;
+    const settingsBtn    = document.getElementById('settingsBtn');
+    const settingsMenu   = document.getElementById('settingsMenu');
+    const debugToggle    = document.getElementById('debugToggle');
+    const debugSwitch    = document.getElementById('debugToggleSwitch');
+
+    settingsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      settingsMenu.classList.toggle('show');
     });
-  }
+    document.addEventListener('click', () => settingsMenu.classList.remove('show'));
+    settingsMenu.addEventListener('click', (e) => e.stopPropagation());
 
-  els.retakeBtn.onclick = () => {
-    hide(els.resultsCard); hide(els.errorCard);
-    show(els.inputCard);
-    show(els.captureControls);
-    show(els.capturePlaceholder);
-    hide(els.snapWrap);
-    els.fileInput.value = '';
-  };
+    debugToggle.addEventListener('click', () => {
+      debugMode = !debugMode;
+      debugSwitch.classList.toggle('on', debugMode);
+      settingsBtn.classList.toggle('debug-active', debugMode);
+      // Show/hide debug badge
+      document.getElementById('debugBadge')?.remove();
+      if (debugMode) {
+        const badge = document.createElement('div');
+        badge.id = 'debugBadge';
+        badge.className = 'debug-badge';
+        badge.textContent = 'DEBUG';
+        document.querySelector('.header').appendChild(badge);
+      }
+      settingsMenu.classList.remove('show');
+    });
 
-  // ── UI helpers ────────────────────────────────────────────────
-  function setProcess(msg, pct) {
-    if (pct !== null && pct !== undefined) els.progressBar.style.width = (pct || 0) + '%';
-    if (msg !== null && msg !== undefined) els.processMsg.textContent = msg;
-  }
-  function show(el) { el.classList.remove('hidden'); }
-  function hide(el) { el.classList.add('hidden'); }
-  function showError(msg) {
-    hide(els.processCard); show(els.errorCard);
-    els.errorMsg.textContent = msg;
-    show(els.inputCard);
-    show(els.captureControls);
-    show(els.capturePlaceholder);
-    hide(els.snapWrap);
-  }
-  function escapeHtml(s) { return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-  function safeStringify(o) { try { return JSON.stringify(o, null, 2).slice(0, 6000); } catch { return String(o); } }
+    // Debug-mode analyze: shows processed image, prompt, then sends to Gemini and shows raw results table
+    async function analyzeShelfDebug() {
+      analyzeBtn.disabled    = true;
+      analyzeBtn.textContent = 'Processing…';
 
-</script>
+      // Give UI a tick to update
+      await new Promise(r => setTimeout(r, 50));
+
+      const t0       = performance.now();
+      const image    = getResizedImageData();
+      const procTime = Math.round(performance.now() - t0);
+      const section  = getSection();
+      const prompt   = buildPrompt(section);
+
+      // Build debug overlay
+      const overlay = document.createElement('div');
+      overlay.id = 'debugOverlay';
+      overlay.className = 'debug-overlay';
+
+      // Section 1: Image sent to Gemini
+      overlay.innerHTML = `
+        <div class="debug-section">
+          <div class="debug-section-title">Image (sent to Gemini) · ${procTime}ms</div>
+          <img class="debug-img" src="data:image/jpeg;base64,${image}" />
+        </div>
+        <div class="debug-section">
+          <div class="debug-section-title">Prompt</div>
+          <div class="debug-prompt">${escapeHtml(prompt)}</div>
+        </div>
+        <div class="debug-section" id="debugResultsSection">
+          <div class="debug-section-title">Gemini Results</div>
+          <div style="color:#888;font-size:13px;text-align:center;padding:20px 0">
+            Tap "Send to Gemini" below to see results
+          </div>
+        </div>
+        <div class="debug-actions">
+          <button class="btn btn-retake" id="debugClose">Close</button>
+          <button class="btn btn-analyze" id="debugSend">Send to Gemini</button>
+        </div>`;
+
+      cameraWrap.appendChild(overlay);
+
+      document.getElementById('debugClose').onclick = () => {
+        overlay.remove();
+        analyzeBtn.disabled    = false;
+        analyzeBtn.textContent = 'Analyze';
+      };
+
+      document.getElementById('debugSend').onclick = async () => {
+        const sendBtn = document.getElementById('debugSend');
+        sendBtn.disabled = true;
+        sendBtn.textContent = 'Sending…';
+        const resultsDiv = document.getElementById('debugResultsSection');
+        resultsDiv.innerHTML = `
+          <div class="debug-section-title">Gemini Results</div>
+          <div style="color:#888;font-size:13px;text-align:center;padding:20px 0">Waiting for response…</div>`;
+
+        try {
+          const apiT0 = performance.now();
+          const books = await callGemini(prompt, image);
+          const apiTime = Math.round(performance.now() - apiT0);
+          const checked = checkOrder(books, section);
+
+          // Build results table
+          const outCount = checked.filter(b => b.outOfOrder).length;
+          const unvCount = checked.filter(b => b.unverifiable).length;
+          const okCount  = checked.length - outCount - unvCount;
+
+          let tableHtml = `
+            <div class="debug-section-title">
+              Gemini Results · ${GEMINI_MODEL} · ${apiTime}ms ·
+              <span style="color:#4ade80">${okCount} ok</span>
+              <span style="color:#ef4444">${outCount} misplaced</span>
+              <span style="color:#facc15">${unvCount} unverifiable</span>
+            </div>
+            <div style="overflow-x:auto">
+            <table class="debug-book-table">
+              <tr>
+                <th>#</th><th>Title</th><th>Author</th><th>Label</th><th>Vol</th><th>Conf</th><th>Status</th>
+              </tr>`;
+
+          for (const b of checked) {
+            const cls = b.outOfOrder ? 'book-bad' : b.unverifiable ? 'book-unv' : 'book-ok';
+            const confColor = b.confidence === 'high' ? '#4ade80' : b.confidence === 'medium' ? '#facc15' : '#f87171';
+            const status = b.outOfOrder
+              ? `<span style="color:#ef4444">Move → ${b.idealPosition || '?'}</span>`
+              : b.unverifiable
+              ? '<span style="color:#facc15">?</span>'
+              : '<span style="color:#4ade80">OK</span>';
+            const conflict = b._authorConflict ? ' <span style="color:#facc15" title="Label/author mismatch">!</span>' : '';
+
+            tableHtml += `
+              <tr class="${cls}">
+                <td>${b.shelfPosition ?? b.position ?? '—'}</td>
+                <td>${escapeHtml(b.title) || '—'}</td>
+                <td>${escapeHtml(b.author_last) || '—'}${conflict}</td>
+                <td>${escapeHtml(b.spine_label) || '—'}</td>
+                <td>${b.series_volume != null ? b.series_volume : '—'}</td>
+                <td><span class="debug-conf-dot" style="background:${confColor}"></span>${b.confidence || '—'}</td>
+                <td>${status}</td>
+              </tr>`;
+          }
+          tableHtml += '</table></div>';
+          resultsDiv.innerHTML = tableHtml;
+
+        } catch (err) {
+          resultsDiv.innerHTML = `
+            <div class="debug-section-title">Gemini Results</div>
+            <div style="color:#f87171;font-size:13px;padding:12px 0">Error: ${escapeHtml(err.message)}</div>`;
+        }
+
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'Send Again';
+      };
+    }
+
+    analyzeBtn.addEventListener('click', () => {
+      if (debugMode) analyzeShelfDebug();
+      else analyzeShelf();
+    });
+
+    // ── Test suite ──────────────────────────────────────
+    // Run with runTests() in the browser console.
+    // Tests cover: name parsing, sort keys, ordering logic, reconciliation.
+    function runTests() {
+      let pass = 0, fail = 0;
+      function assert(cond, msg) {
+        if (cond) { pass++; }
+        else { fail++; console.error('FAIL:', msg); }
+      }
+      function eq(a, b, msg) { assert(a === b, `${msg}: expected "${b}", got "${a}"`); }
+      function deepEq(a, b, msg) { assert(JSON.stringify(a) === JSON.stringify(b), `${msg}: expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`); }
+
+      // ── parseSurnameAndFirst ──
+      console.group('parseSurnameAndFirst');
+
+      deepEq(parseSurnameAndFirst('BLACK'), { surname: 'black', first: '' },
+        'Single all-caps surname');
+
+      deepEq(parseSurnameAndFirst('BLACK, Benjamin'), { surname: 'black', first: 'benjamin' },
+        'Comma-separated Last, First');
+
+      deepEq(parseSurnameAndFirst('BLACK, Cara, Leduc 5'), { surname: 'black', first: 'cara' },
+        'Label with series — strips series, keeps surname and first');
+
+      deepEq(parseSurnameAndFirst('Cara Black'), { surname: 'black', first: 'cara' },
+        'First Last format');
+
+      deepEq(parseSurnameAndFirst('BLACK Benjamin'), { surname: 'black', first: 'benjamin' },
+        'ALL CAPS surname then Mixed Case first');
+
+      // Multi-word surnames
+      deepEq(parseSurnameAndFirst('DE LA CRUZ, Maria'), { surname: 'delacruz', first: 'maria' },
+        'Multi-word surname with comma');
+
+      deepEq(parseSurnameAndFirst('Maria De La Cruz'), { surname: 'delacruz', first: 'maria' },
+        'Multi-word surname First-Last format');
+
+      deepEq(parseSurnameAndFirst('VAN DYKE, Dick'), { surname: 'vandyke', first: 'dick' },
+        'Van Dyke comma format');
+
+      deepEq(parseSurnameAndFirst('Dick Van Dyke'), { surname: 'vandyke', first: 'dick' },
+        'Van Dyke first-last format');
+
+      // Suffixes
+      deepEq(parseSurnameAndFirst('Black Jr'), { surname: 'black', first: '' },
+        'Surname with Jr suffix — strips Jr');
+
+      deepEq(parseSurnameAndFirst('Martin Luther King Jr'), { surname: 'king', first: 'martinluther' },
+        'Full name with Jr suffix');
+
+      deepEq(parseSurnameAndFirst(null), null, 'null input');
+      deepEq(parseSurnameAndFirst(''), null, 'empty string');
+      deepEq(parseSurnameAndFirst('   '), null, 'whitespace only');
+
+      console.groupEnd();
+
+      // ── normalizeAuthor ──
+      console.group('normalizeAuthor');
+      eq(normalizeAuthor('Cara Black'), 'black', 'First Last');
+      eq(normalizeAuthor('Black, Cara'), 'black', 'Last, First');
+      eq(normalizeAuthor('BLACK'), 'black', 'All caps');
+      eq(normalizeAuthor('Black Jr'), 'black', 'With Jr suffix');
+      eq(normalizeAuthor(null), null, 'null');
+      eq(normalizeAuthor(''), null, 'empty');
+      console.groupEnd();
+
+      // ── parseDewey ──
+      console.group('parseDewey');
+      deepEq(parseDewey('973.7 HAR'), { num: 973.7, cut: 'har', prefix: '973.7' },
+        'Standard Dewey with cutter');
+      deepEq(parseDewey('KIN'), { num: null, cut: '', prefix: 'kin' },
+        'Author cutter only');
+      deepEq(parseDewey('813 PAT'), { num: 813, cut: 'pat', prefix: '813' },
+        'Dewey integer with cutter');
+      eq(parseDewey(null), null, 'null');
+      eq(parseDewey(''), null, 'empty');
+      console.groupEnd();
+
+      // ── extractVolume ──
+      console.group('extractVolume');
+      eq(extractVolume({ series_volume: 5 }), 5, 'Explicit volume');
+      eq(extractVolume({ spine_label: 'Leduc 5' }), 5, 'Volume from label');
+      eq(extractVolume({ spine_label: 'BLACK' }), null, 'No volume');
+      eq(extractVolume({}), null, 'Empty book');
+      console.groupEnd();
+
+      // ── reconcileAuthorFields ──
+      console.group('reconcileAuthorFields');
+      let book1 = { spine_label: 'BLACK, Cara', author_last: 'Black', confidence: 'high' };
+      eq(reconcileAuthorFields(book1).confidence, 'high', 'Consistent fields — no change');
+
+      let book2 = { spine_label: 'KING, Stephen', author_last: 'Patterson', confidence: 'high' };
+      let rec2 = reconcileAuthorFields(book2);
+      eq(rec2.confidence, 'medium', 'Conflicting fields — downgraded');
+      eq(rec2._authorConflict, true, 'Conflict flag set');
+
+      let book3 = { spine_label: 'BLACK, Cara', author_last: 'Blackwell', confidence: 'high' };
+      eq(reconcileAuthorFields(book3).confidence, 'high', 'Prefix match — no downgrade');
+
+      let book4 = { author_last: 'Black', confidence: 'high' };
+      eq(reconcileAuthorFields(book4).confidence, 'high', 'No label — no change');
+      console.groupEnd();
+
+      // ── sortKey ──
+      console.group('sortKey');
+      let sk1 = sortKey({ spine_label: 'BLACK, Cara', author_last: 'Black', title: 'Murder' }, 'fiction');
+      eq(sk1.kind, 'str', 'Fiction + label → str key');
+      eq(sk1.val, 'black', 'Fiction label surname');
+      eq(sk1.first, 'cara', 'Fiction label first name');
+
+      let sk2 = sortKey({ author_last: 'Patterson', title: 'Max Ride' }, 'fiction');
+      eq(sk2.val, 'patterson', 'Fiction fallback to author_last');
+
+      let sk3 = sortKey({ spine_label: '973.7 HAR' }, 'nonfiction');
+      eq(sk3.kind, 'dewey', 'Nonfiction Dewey key');
+      eq(sk3.val.num, 973.7, 'Dewey number');
+
+      let sk4 = sortKey({ confidence: 'low' }, 'fiction');
+      eq(sk4, null, 'Low confidence no label → null (unverifiable)');
+
+      let sk5 = sortKey({ spine_label: '813.54 PAT' }, 'auto');
+      eq(sk5.kind, 'dewey', 'Auto mode Dewey detection');
+
+      let sk6 = sortKey({ spine_label: 'KING' }, 'auto');
+      eq(sk6.kind, 'str', 'Auto mode — non-Dewey label → str');
+      eq(sk6.val, 'king', 'Auto mode author from label');
+      console.groupEnd();
+
+      // ── compareKeys ──
+      console.group('compareKeys');
+      let ka = { kind: 'str', val: 'black', first: 'benjamin', vol: null, title: '' };
+      let kb = { kind: 'str', val: 'black', first: 'cara', vol: null, title: '' };
+      assert(compareKeys(ka, kb) < 0, 'Same surname, benjamin < cara');
+
+      let kc = { kind: 'str', val: 'black', first: 'cara', vol: 3, title: '' };
+      let kd = { kind: 'str', val: 'black', first: 'cara', vol: 5, title: '' };
+      assert(compareKeys(kc, kd) < 0, 'Same author, vol 3 < vol 5');
+
+      let ke = { kind: 'str', val: 'black', first: 'cara', vol: null, title: 'alpha' };
+      let kf = { kind: 'str', val: 'black', first: 'cara', vol: null, title: 'beta' };
+      assert(compareKeys(ke, kf) < 0, 'Same author no vol, title alpha < beta');
+
+      let kg = { kind: 'dewey', val: { num: 813, cut: 'pat', prefix: '813' }, vol: null, title: '' };
+      let kh = { kind: 'dewey', val: { num: 973.7, cut: 'har', prefix: '973.7' }, vol: null, title: '' };
+      assert(compareKeys(kg, kh) < 0, 'Dewey 813 < 973.7');
+
+      assert(compareKeys({ kind: 'dewey', val: { num: 1, cut: '', prefix: '1' }, vol: null, title: '' },
+                          { kind: 'str', val: 'a', first: '', vol: null, title: '' }) < 0,
+        'Dewey before string in mixed sections');
+      console.groupEnd();
+
+      // ── checkOrder with simple shelf ──
+      console.group('checkOrder (simple)');
+      const simpleBooks = [
+        { position: 1, author_last: 'Adams',  spine_label: 'ADAMS',  title: 'A', confidence: 'high', bounding_box: [100, 0, 900, 100] },
+        { position: 2, author_last: 'Black',  spine_label: 'BLACK',  title: 'B', confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { position: 3, author_last: 'Clark',  spine_label: 'CLARK',  title: 'C', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      const simpleResult = checkOrder(simpleBooks, 'fiction');
+      assert(simpleResult.every(b => !b.outOfOrder), 'All in order — no flags');
+      assert(simpleResult.every(b => !b.unverifiable), 'All verifiable');
+      console.groupEnd();
+
+      // ── checkOrder with misplaced book ──
+      console.group('checkOrder (misplaced)');
+      const misplacedBooks = [
+        { position: 1, author_last: 'Adams',  spine_label: 'ADAMS',  title: 'A', confidence: 'high', bounding_box: [100, 0, 900, 100] },
+        { position: 2, author_last: 'Clark',  spine_label: 'CLARK',  title: 'C', confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { position: 3, author_last: 'Black',  spine_label: 'BLACK',  title: 'B', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      const misResult = checkOrder(misplacedBooks, 'fiction');
+      assert(misResult[0].outOfOrder === false, 'Adams in order');
+      assert(misResult[1].outOfOrder === false, 'Clark in LIS');
+      assert(misResult[2].outOfOrder === true, 'Black flagged out of order');
+      console.groupEnd();
+
+      // ── checkOrder with unverifiable book ──
+      console.group('checkOrder (unverifiable)');
+      const unvBooks = [
+        { position: 1, author_last: 'Adams',  spine_label: 'ADAMS',  title: 'A', confidence: 'high', bounding_box: [100, 0, 900, 100] },
+        { position: 2, author_last: null,      spine_label: null,     title: null, confidence: 'low', bounding_box: [100, 100, 900, 200] },
+        { position: 3, author_last: 'Clark',  spine_label: 'CLARK',  title: 'C', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      const unvResult = checkOrder(unvBooks, 'fiction');
+      assert(unvResult[1].unverifiable === true, 'Low confidence + no label → unverifiable');
+      assert(unvResult[1].outOfOrder === false, 'Unverifiable not flagged as out-of-order');
+      console.groupEnd();
+
+      // ── checkOrder sandwich rule ──
+      console.group('checkOrder (sandwich rule)');
+      const sandwichBooks = [
+        { position: 1, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'A', confidence: 'high', bounding_box: [100, 0, 900, 100] },
+        { position: 2, author_last: 'Zulu',  spine_label: 'ZULU',        title: 'Z', confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { position: 3, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'B', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      const sandwichResult = checkOrder(sandwichBooks, 'fiction');
+      assert(sandwichResult[1].unverifiable === true,
+        'OCR outlier sandwiched between matching neighbors → demoted to unverifiable');
+      assert(sandwichResult[1].outOfOrder === false,
+        'Sandwiched book not flagged out-of-order');
+      console.groupEnd();
+
+      // ── Multi-shelf grouping ──
+      console.group('groupByShelf');
+      const multiShelfBooks = [
+        { position: 1, bounding_box: [100, 0, 400, 100] },   // shelf 1
+        { position: 2, bounding_box: [100, 100, 400, 200] },  // shelf 1
+        { position: 3, bounding_box: [600, 0, 900, 100] },    // shelf 2
+        { position: 4, bounding_box: [600, 100, 900, 200] },  // shelf 2
+      ];
+      const grouped = groupByShelf(multiShelfBooks);
+      eq(grouped.shelves.length, 2, 'Two shelves detected');
+      eq(grouped.shelves[0].length, 2, 'Shelf 1 has 2 books');
+      eq(grouped.shelves[1].length, 2, 'Shelf 2 has 2 books');
+      eq(grouped.ungrouped.length, 0, 'No ungrouped books');
+      console.groupEnd();
+
+      // ── Tied books ──
+      console.group('checkOrder (tied keys)');
+      const tiedBooks = [
+        { position: 1, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'A', confidence: 'high', bounding_box: [100, 0, 900, 100] },
+        { position: 2, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'B', confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { position: 3, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'C', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      const tiedResult = checkOrder(tiedBooks, 'fiction');
+      assert(tiedResult.every(b => !b.outOfOrder), 'Tied books — none flagged out of order');
+      console.groupEnd();
+
+      console.log(`\n=== Tests complete: ${pass} passed, ${fail} failed ===`);
+      return { pass, fail };
+    }
+
+    // First-run hint / legend — shown once, explains framing + result colors.
+    function maybeShowFirstHint() {
+      let seen = false;
+      try { seen = localStorage.getItem('shelfcheck.hintSeen') === '1'; } catch {}
+      if (seen) return;
+
+      const hint = document.createElement('div');
+      hint.className = 'first-hint';
+      hint.innerHTML = `
+        <div class="first-hint-card">
+          <h3>How ShelfCheck works</h3>
+          <div class="first-hint-row">
+            <span class="first-hint-dot" style="background:#3b82f6"></span>
+            <span>Point at a shelf and tap the shutter. Pinch in for detail, or out for a wider view.</span>
+          </div>
+          <div class="first-hint-row">
+            <span class="first-hint-dot" style="background:#ef4444"></span>
+            <span><b>Red</b> = out of order. The arrow shows where to move it.</span>
+          </div>
+          <div class="first-hint-row">
+            <span class="first-hint-dot" style="background:#facc15"></span>
+            <span><b>Yellow ?</b> = couldn't read the spine clearly — check it by eye.</span>
+          </div>
+          <div class="first-hint-row">
+            <span class="first-hint-dot" style="background:#4ade80"></span>
+            <span><b>Green</b> = in order. Tap any book to see what was read.</span>
+          </div>
+          <button class="first-hint-btn" id="firstHintBtn">Got it</button>
+        </div>`;
+      photoArea.appendChild(hint);
+      document.getElementById('firstHintBtn').onclick = () => {
+        hint.remove();
+        try { localStorage.setItem('shelfcheck.hintSeen', '1'); } catch {}
+      };
+    }
+
+    // Auto-start camera on load
+    startCamera();
+    maybeShowFirstHint();
+  </script>
+
 </body>
 </html>
