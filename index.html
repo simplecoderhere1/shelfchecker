@@ -1672,7 +1672,7 @@ Example: [{"a":"BLACK","t":"Murder in Clichy","l":"BLACK, Cara 5","v":5,"c":1,"b
       const outCount = checked.filter(b => b.outOfOrder).length;
       const unvCount = checked.filter(b => b.unverifiable).length;
 
-      actionBtns.classList.remove('show');
+      actionBar.classList.remove('show');
 
       // No books detected — don't claim "all in order". Prompt a retake instead.
       if (total === 0) {
