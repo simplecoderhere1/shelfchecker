@@ -756,7 +756,8 @@ Each inner array has exactly 4 elements:
 3: bounding box of that spine as [ymin,xmin,ymax,xmax] normalized 0–1000, tight to just that one spine, never spanning neighbors or shelves.
 CRITICAL for element 0: read the sticker character-by-character exactly as printed. The cutter letters come from the AUTHOR'S last name, NOT from the title. Never infer or guess the cutter from the title — e.g. "The New Organic Grower" by Coleman has sticker "635.04 COL", not "635.04 THE". If you cannot read it clearly, return null.
 Never copy a neighbor's label.
-Example: [["973.7 HAR","Lincoln",1,[420,10,980,85]],["KIN","The Stand",1,[420,90,980,170]]]`;
+Example: [["973.7 HAR","Lincoln",1,[420,10,980,85]],["KIN","The Stand",1,[420,90,980,170]]]
+Example of unreadable sticker: [null, "Harry Potter", 0, [420,190,980,270]]`;
       }
 
       return `This is a library FICTION shelf photo. There may be multiple shelves.
@@ -768,7 +769,8 @@ Each inner array has exactly 4 elements:
 2: 1 if you read the white sticker clearly, 0 if unsure.
 3: bounding box of that spine as [ymin,xmin,ymax,xmax] normalized 0–1000, tight to just that one spine, never spanning neighbors or shelves.
 Rules: the white bottom sticker is the primary sort key — read it first. Return null and 0 for element 2 if you cannot read the sticker. Never copy a neighbor's text.
-Example: [["BLACK, Cara","Murder in Clichy",1,[420,10,980,85]],["KING, Stephen","The Stand",1,[420,90,980,170]]]`;
+Example: [["BLACK, Cara","Murder in Clichy",1,[420,10,980,85]],["KING, Stephen","The Stand",1,[420,90,980,170]]]
+Example of unreadable sticker: [null, "The Stand", 0, [420,190,980,270]]`;
     }
 
     // Expand the 4-element wire format [spine_label, title, confidence, box].
@@ -807,9 +809,9 @@ Example: [["BLACK, Cara","Murder in Clichy",1,[420,10,980,85]],["KING, Stephen",
     }
 
     // Resize snapshot and return a single base64 JPEG for the API request.
-    // 1536px / q0.82: balances token processing speed and upload size while
-    // keeping spine labels legible.
-    function getResizedImageData(maxDim = 1536, quality = 0.82) {
+    // 2400px / q0.82: captures the high resolution needed for tiny library stickers
+    // without sacrificing too much upload speed.
+    function getResizedImageData(maxDim = 2400, quality = 0.82) {
       const W = snapshot.width;
       const H = snapshot.height;
       const scale = Math.min(1, maxDim / Math.max(W, H));
@@ -863,6 +865,7 @@ Example: [["BLACK, Cara","Murder in Clichy",1,[420,10,980,85]],["KING, Stephen",
             model: GEMINI_MODEL,
             generationConfig: {
               temperature: 0,
+              response_mime_type: 'application/json',
               // Disable "thinking" — adds huge latency without improving spine reads.
               thinkingConfig: { thinkingBudget: 0 },
             },
@@ -882,8 +885,8 @@ Example: [["BLACK, Cara","Murder in Clichy",1,[420,10,980,85]],["KING, Stephen",
 
       const json  = await res.json();
       const raw   = json.candidates[0].content.parts[0].text;
-      return JSON.parse(raw.replace(/```json|```/g, '').trim())
-        .map(expandBook);
+      // With response_mime_type: 'application/json', we don't need markdown regex cleanup
+      return JSON.parse(raw).map(expandBook);
     }
 
     async function analyzeShelf() {
@@ -897,26 +900,37 @@ Example: [["BLACK, Cara","Murder in Clichy",1,[420,10,980,85]],["KING, Stephen",
       const section = getSection();
       const prompt  = buildPrompt(section);
       let success = false;
+      const maxAttempts = 2;
 
-      try {
-        const tApi0 = performance.now();
-        const books = await callGemini(prompt, image);
-        const apiTime = Math.round(performance.now() - tApi0);
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        if (attempt > 1) {
+          analyzeBtn.textContent = `Retrying (Attempt ${attempt})…`;
+        }
+        try {
+          const tApi0 = performance.now();
+          const books = await callGemini(prompt, image);
+          const apiTime = Math.round(performance.now() - tApi0);
 
-        success = true;
-        showResults(books, section);
-        if (debugMode) showTimingBadge(procTime, apiTime, GEMINI_MODEL);
-      } catch (err) {
-        const offline = !navigator.onLine || /Failed to fetch|NetworkError/i.test(err.message);
-        showErrorBanner(
-          offline ? "Couldn't reach the server. Check your connection." : `Analysis failed: ${err.message}`,
-          () => analyzeShelf()
-        );
-        analyzeBtn.disabled    = false;
-        analyzeBtn.textContent = 'Analyze';
-      } finally {
-        hideLoading(success);
+          success = true;
+          showResults(books, section);
+          if (debugMode) showTimingBadge(procTime, apiTime, GEMINI_MODEL);
+          break; // success, exit the retry loop
+        } catch (err) {
+          console.warn(`Attempt ${attempt} failed:`, err);
+          if (attempt === maxAttempts || !navigator.onLine) {
+            const offline = !navigator.onLine || /Failed to fetch|NetworkError/i.test(err.message);
+            showErrorBanner(
+              offline ? "Couldn't reach the server. Check your connection." : `Analysis failed: ${err.message}`,
+              () => analyzeShelf()
+            );
+            analyzeBtn.disabled    = false;
+            analyzeBtn.textContent = 'Analyze';
+            break;
+          }
+          // otherwise loop continues to retry
+        }
       }
+      hideLoading(success);
     }
 
     // On-screen timing readout for Debug Mode: prep (CPU image pipeline) vs model
