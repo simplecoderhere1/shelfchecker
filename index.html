@@ -650,7 +650,7 @@
 
     const isHorizontal = (bb) => bb.w >= bb.h * 0.9;
     let anchors = regs.filter(l => isLabel(l.text) && isHorizontal(l.bb)
-      && (clean(l.text).length >= 4 || l.text.includes(',')));
+      && (mode === 'nonfiction' || clean(l.text).length >= 4 || l.text.includes(',')));
     if (!anchors.length) return [];
 
     anchors.sort((a, b) => b.text.length - a.text.length || b.score - a.score);
