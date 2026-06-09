@@ -845,32 +845,31 @@
     //   a=author surname, t=title, l=sticker label, v=volume int, c=confidence(0/1), b=box
     function buildPrompt(section) {
       const sec =
-        section === 'nonfiction' ? 'This is a NONFICTION shelf (books sort by Dewey/call number — put it in "l").'
+        section === 'nonfiction' ? 'This is a NONFICTION shelf (books sort by Dewey/call number — put it in index 1).'
         : 'This is a FICTION shelf (books sort by author surname).';
 
       return `Read every book spine in this library shelf photo, left-to-right and top-to-bottom.
-Return ONLY a JSON array. Each spine = one object with these short keys:
-"a": author SURNAME only (uppercase), or null. The white sticker at the bottom of the spine is the most reliable source.
-"t": book TITLE only (NOT the author), or null.
-"l": full text on the white bottom sticker, e.g. "KIN", "973.7 HAR", "BLACK, Cara 5", or null.
-"v": series volume number as an integer if shown, else null.
-"c": 1 if you read the spine clearly, 0 if unsure.
-"b": tight bounding box [ymin,xmin,ymax,xmax], normalized 0-1000, hugging that ONE spine only (never spanning neighbors or shelves).
+Return ONLY a JSON array of arrays. Each inner array represents one spine with these 5 elements in exact order:
+0: author SURNAME only (uppercase), or null. The white sticker at the bottom of the spine is the most reliable source.
+1: full text on the white bottom sticker, e.g. "KIN", "973.7 HAR", "BLACK, Cara 5", or null.
+2: series volume number as an integer if shown, else null.
+3: 1 if you read the spine clearly, 0 if unsure.
+4: tight bounding box [ymin,xmin,ymax,xmax], normalized 0-1000, hugging that ONE spine only (never spanning neighbors or shelves).
 ${sec}
-Rules: read the bottom sticker first. NEVER copy a neighbor's text — use null and c:0 if unsure (a wrong guess hides shelving errors). "t" and "a" must differ.
-Example: [{"a":"BLACK","t":"Murder in Clichy","l":"BLACK, Cara 5","v":5,"c":1,"b":[80,50,920,140]}]`;
+Rules: read the bottom sticker first. NEVER copy a neighbor's text — use null and 0 for element 3 if unsure (a wrong guess hides shelving errors).
+Example: [["BLACK","BLACK, Cara 5",5,1,[80,50,920,140]]]`;
     }
 
     // Expand the terse wire format back into the field names the sorting logic expects.
-    function expandBook(o) {
+    function expandBook(arr) {
       return {
-        author_last:   o.a ?? null,
-        title:         o.t ?? null,
-        spine_label:   o.l ?? null,
+        author_last:   arr[0] ?? null,
+        title:         null,
+        spine_label:   arr[1] ?? null,
         call_number:   null,                                    // Dewey rides in spine_label
-        series_volume: typeof o.v === 'number' ? o.v : null,
-        confidence:    o.c === 1 ? 'high' : 'low',
-        bounding_box:  Array.isArray(o.b) && o.b.length === 4 ? o.b : null,
+        series_volume: typeof arr[2] === 'number' ? arr[2] : null,
+        confidence:    arr[3] === 1 ? 'high' : 'low',
+        bounding_box:  Array.isArray(arr[4]) && arr[4].length === 4 ? arr[4] : null,
       };
     }
 
@@ -896,9 +895,9 @@ Example: [{"a":"BLACK","t":"Murder in Clichy","l":"BLACK, Cara 5","v":5,"c":1,"b
     }
 
     // Resize snapshot and return a single base64 JPEG for the API request.
-    // 2048px / q0.82: fewer image tiles for the model to prefill (the main remaining
-    // latency cost) and a smaller upload. Spine labels stay legible at this size.
-    function getResizedImageData(maxDim = 2048, quality = 0.82) {
+    // 1536px / q0.82: balances token processing speed and upload size while
+    // keeping spine labels legible.
+    function getResizedImageData(maxDim = 1536, quality = 0.82) {
       const W = snapshot.width;
       const H = snapshot.height;
       const scale = Math.min(1, maxDim / Math.max(W, H));
