@@ -888,7 +888,14 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       const json  = await res.json();
       const raw   = json.candidates[0].content.parts[0].text;
       // With response_mime_type: 'application/json', we don't need markdown regex cleanup
-      return JSON.parse(raw).map(expandBook);
+      return JSON.parse(raw)
+        .map(expandBook)
+        .filter(b => {
+          if (!b.bounding_box) return true;
+          const [ymin, xmin, ymax, xmax] = b.bounding_box;
+          // Ignore books that are cut off by touching the absolute edge of the image frame
+          return xmin > 5 && xmax < 995 && ymin > 5 && ymax < 995;
+        });
     }
 
     async function analyzeShelf() {
