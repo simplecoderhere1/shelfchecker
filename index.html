@@ -856,6 +856,7 @@ Each inner array has exactly 4 elements:
 CRITICAL for element 0: read the sticker character-by-character exactly as printed. The cutter letters come from the AUTHOR'S last name, NOT from the title. Never infer or guess the cutter from the title — e.g. "The New Organic Grower" by Coleman has sticker "635.04 COL", not "635.04 THE". If you cannot read it clearly, return null.
 If a sticker is partially cut off by the edge of the image or another book, DO NOT guess the missing letters or numbers. Return null.
 Never copy a neighbor's label.
+IMPORTANT for element 2: return 1 ONLY if you can read every character of the sticker with certainty. If ANY character is unclear, blurry, shadowed, or you are guessing even one letter, return 0. A wrong sticker causes incorrect shelving flags — when in doubt, return 0.
 Example: [["973.7 HAR","Lincoln",1,[420,10,980,85]],["KIN","The Stand",1,[420,90,980,170]]]
 Example of unreadable or cropped sticker: [null, "Harry Potter", 0, [420,190,980,270]]`;
       }
@@ -870,6 +871,7 @@ Each inner array has exactly 4 elements:
 3: bounding box of that spine as [ymin,xmin,ymax,xmax] normalized 0–1000, tight to just that one spine, never spanning neighbors or shelves.
 Rules: the white bottom sticker is the primary sort key — read it first. Return null and 0 for element 2 if you cannot read the sticker. Never copy a neighbor's text.
 If a sticker is partially cut off by the edge of the image or another book, DO NOT guess the missing letters or numbers. Return null.
+IMPORTANT for element 2: return 1 ONLY if you can read every character of the sticker with certainty. If ANY character is unclear, blurry, shadowed, or you are guessing even one letter, return 0. A wrong sticker causes incorrect shelving flags — when in doubt, return 0.
 Example: [["BLACK, Cara","Murder in Clichy",1,[420,10,980,85]],["KING, Stephen","The Stand",1,[420,90,980,170]]]
 Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,270]]`;
     }
@@ -1340,10 +1342,12 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
     // String keys carry surname (val), first name (first), and series volume (vol).
     // Comparison is surname → first name → volume (and a title fallback).
     function sortKey(book, section) {
-      // Spine cut off by the photo edge — the sticker read can't be trusted,
-      // so never use it to flag a misorder. Rendered yellow ("check by hand").
+      // Spine cut off by the photo edge — the sticker read can't be trusted.
       if (book._edgeCropped) return null;
-      const lowConfNoLabel = book.confidence === 'low' && !book.spine_label;
+      // Model flagged this label as uncertain (confidence 0). A shaky guess can
+      // cascade into false red flags for neighboring books, so treat it as
+      // unreadable — render yellow ("check by hand") rather than risk a false alarm.
+      if (book.confidence === 'low') return null;
       const vol = extractVolume(book);
       const title = lettersLower((book.title || '').replace(/^the\s+|^a\s+|^an\s+/i, ''));
 
@@ -1357,7 +1361,6 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
           const k = strKeyFromAuthorish(book.spine_label);
           if (k) return k;
         }
-        if (lowConfNoLabel) return null;
         return strKeyFromAuthorish(book.author_last);
       }
 
@@ -1383,7 +1386,15 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
     //   2. primary value (surname / Dewey number+cutter)
     //   3. first name (within same surname: Benjamin < Cara)
     //   4. series volume number (within same author: Leduc 5 < Leduc 6; nulls sort last)
-    //   5. title (final tiebreaker for non-series books with same author)
+    //   5. title (fiction ONLY — see note below)
+    //
+    // IMPORTANT: title is a tiebreaker for FICTION only. There the label is a full
+    // author name ("BLACK, Cara"), so two books with the same label are genuinely
+    // the same author, shelved by title. For a Dewey cutter ("635 GAR") the three
+    // letters come from the author surname and are shared by MANY different authors
+    // (Garcia, Gardner, Garden…), so two "635 GAR" books CANNOT be ordered from the
+    // sticker alone — they must be treated as tied. Using title there produced false
+    // "out of order" flags on correctly-shelved same-call-number books.
     function compareKeys(a, b) {
       if (a.kind !== b.kind) return a.kind === 'dewey' ? -1 : 1;
 
@@ -1413,7 +1424,8 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       const bv = b.vol == null ? Infinity : b.vol;
       if (av !== bv) return av - bv;
 
-      // 5. Title (alphabetical, ignoring leading "the/a/an")
+      // 5. Title — fiction only. Dewey same-cutter books are tied (return 0).
+      if (a.kind !== 'str') return 0;
       const at = a.title || '';
       const bt = b.title || '';
       return at.localeCompare(bt, undefined, { sensitivity: 'base' });
@@ -1767,8 +1779,8 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       };
     }
 
-    // Mark only the white LABEL at the foot of each flagged spine (small + unobtrusive):
-    // red = out of order, yellow = couldn't read. In-order books stay unmarked.
+    // Thin stripe at the TOP of each flagged spine — sits on the spine body,
+    // not at the white label at the foot. Red = out of order, yellow = unreadable.
     function renderBoxes() {
       document.getElementById('bookBoxes')?.remove();
       const flagged = lastCheckedBooks.filter(b => b.bounding_box && (b.outOfOrder || b.unverifiable));
@@ -1781,15 +1793,14 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
 
       for (const b of flagged) {
         const r = bbToRect(b.bounding_box);
-        // Label sits at the bottom of the spine — highlight just that strip.
-        const labelH = Math.max(12, Math.min(r.height * 0.16, 30));
+        const markH = Math.max(8, Math.min(r.height * 0.12, 16));
         const mark = document.createElement('div');
         mark.className = 'label-mark ' + (b.outOfOrder ? 'label-mark-bad' : 'label-mark-unv');
-        mark.dataset.bookIdx = lastCheckedBooks.indexOf(b);   // ties the mark to its list row
+        mark.dataset.bookIdx = lastCheckedBooks.indexOf(b);
         mark.style.left   = `${r.left}px`;
-        mark.style.top    = `${r.top + r.height - labelH}px`;
+        mark.style.top    = `${r.top}px`;
         mark.style.width  = `${r.width}px`;
-        mark.style.height = `${labelH}px`;
+        mark.style.height = `${markH}px`;
         wrap.appendChild(mark);
       }
     }
@@ -2355,6 +2366,11 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       assert(compareKeys({ kind: 'dewey', val: { num: 1, cut: '', prefix: '1' }, vol: null, title: '' },
                           { kind: 'str', val: 'a', first: '', vol: null, title: '' }) < 0,
         'Dewey before string in mixed sections');
+
+      // Same Dewey cutter = tied, regardless of title (cutter shared by many authors).
+      let kdt1 = { kind: 'dewey', val: { num: 635, cut: 'gar', prefix: '635' }, vol: null, title: 'ground rules' };
+      let kdt2 = { kind: 'dewey', val: { num: 635, cut: 'gar', prefix: '635' }, vol: null, title: 'garden friends' };
+      eq(compareKeys(kdt1, kdt2), 0, 'Same Dewey cutter tied despite different titles');
       console.groupEnd();
 
       // ── checkOrder with simple shelf ──
@@ -2445,6 +2461,49 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       assert(edgeResult[1].unverifiable === true, 'Edge-cropped book → unverifiable, not flagged');
       assert(edgeResult[1].outOfOrder === false, 'Edge-cropped book never marked out of order');
       assert(edgeResult.length === 3, 'Edge-cropped book still counted (not dropped)');
+      console.groupEnd();
+
+      // ── Duplicate Dewey cutter never flagged on title order ──
+      console.group('checkOrder (same Dewey cutter, mixed title order)');
+      const dupDeweyBooks = [
+        { spine_label: '635 GAL', title: 'Striking Succulent Garden',     confidence: 'high', bounding_box: [100, 0,   900, 100] },
+        { spine_label: '635 GAR', title: 'Ground Rules',                  confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { spine_label: '635 GAR', title: 'Vegetable Gardening Made Easy', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { spine_label: '635 GAR', title: 'Garden Friends',               confidence: 'high', bounding_box: [100, 300, 900, 400] },
+        { spine_label: '635 GAR', title: 'Garden Wisdom & Know-How',     confidence: 'high', bounding_box: [100, 400, 900, 500] },
+        { spine_label: '635 GET', title: 'The Heirloom Life Gardener',   confidence: 'high', bounding_box: [100, 500, 900, 600] },
+      ];
+      const dupDeweyResult = checkOrder(dupDeweyBooks, 'nonfiction');
+      assert(dupDeweyResult.every(b => !b.outOfOrder),
+        'GAL ≤ GAR ×4 (any title order) ≤ GET → nothing flagged out of order');
+      console.groupEnd();
+
+      // ── Low-confidence label: fiction ──
+      console.group('checkOrder (low-confidence fiction)');
+      const lowConfFicBooks = [
+        { spine_label: 'ADAMS', title: 'A', confidence: 'high', bounding_box: [100, 0,   900, 100] },
+        { spine_label: 'ZULU',  title: 'Z', confidence: 'low',  bounding_box: [100, 100, 900, 200] },
+        { spine_label: 'CLARK', title: 'C', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      const lowConfFicResult = checkOrder(lowConfFicBooks, 'fiction');
+      assert(lowConfFicResult[1].unverifiable === true,  'Low-conf fiction label → yellow, not red');
+      assert(lowConfFicResult[1].outOfOrder === false,   'Low-conf label never flagged out-of-order');
+      assert(lowConfFicResult[0].outOfOrder === false,   'Adams unaffected by low-conf neighbor');
+      assert(lowConfFicResult[2].outOfOrder === false,   'Clark unaffected by low-conf neighbor');
+      console.groupEnd();
+
+      // ── Low-confidence label: nonfiction ──
+      console.group('checkOrder (low-confidence nonfiction)');
+      const lowConfNFBooks = [
+        { spine_label: '635 FAR', title: 'A', confidence: 'high', bounding_box: [100, 0,   900, 100] },
+        { spine_label: '635 FRA', title: 'B', confidence: 'low',  bounding_box: [100, 100, 900, 200] },
+        { spine_label: '635 GET', title: 'C', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      const lowConfNFResult = checkOrder(lowConfNFBooks, 'nonfiction');
+      assert(lowConfNFResult[1].unverifiable === true,  'Low-conf Dewey label → yellow, not red');
+      assert(lowConfNFResult[1].outOfOrder === false,   'Low-conf Dewey label never flagged out-of-order');
+      assert(lowConfNFResult[0].outOfOrder === false,   'FAR unaffected by low-conf neighbor');
+      assert(lowConfNFResult[2].outOfOrder === false,   'GET unaffected by low-conf neighbor');
       console.groupEnd();
 
       // ── Section mismatch detection ──

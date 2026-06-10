@@ -36,6 +36,7 @@ def build_prompt(section):
                 'CRITICAL for element 0: read the sticker character-by-character exactly as printed. The cutter letters come from the AUTHOR\'S last name, NOT from the title. Never infer or guess the cutter from the title — e.g. "The New Organic Grower" by Coleman has sticker "635.04 COL", not "635.04 THE". If you cannot read it clearly, return null.\n'
                 'If a sticker is partially cut off by the edge of the image or another book, DO NOT guess the missing letters or numbers. Return null.\n'
                 'Never copy a neighbor\'s label.\n'
+                'IMPORTANT for element 2: return 1 ONLY if you can read every character of the sticker with certainty. If ANY character is unclear, blurry, shadowed, or you are guessing even one letter, return 0. A wrong sticker causes incorrect shelving flags — when in doubt, return 0.\n'
                 'Example: [["973.7 HAR","Lincoln",1,[420,10,980,85]],["KIN","The Stand",1,[420,90,980,170]]]\n'
                 'Example of unreadable or cropped sticker: [null, "Harry Potter", 0, [420,190,980,270]]')
     return ('This is a library FICTION shelf photo. There may be multiple shelves.\n'
@@ -48,6 +49,7 @@ def build_prompt(section):
             '3: bounding box of that spine as [ymin,xmin,ymax,xmax] normalized 0–1000, tight to just that one spine, never spanning neighbors or shelves.\n'
             'Rules: the white bottom sticker is the primary sort key — read it first. Return null and 0 for element 2 if you cannot read the sticker. Never copy a neighbor\'s text.\n'
             'If a sticker is partially cut off by the edge of the image or another book, DO NOT guess the missing letters or numbers. Return null.\n'
+            'IMPORTANT for element 2: return 1 ONLY if you can read every character of the sticker with certainty. If ANY character is unclear, blurry, shadowed, or you are guessing even one letter, return 0. A wrong sticker causes incorrect shelving flags — when in doubt, return 0.\n'
             'Example: [["BLACK, Cara","Murder in Clichy",1,[420,10,980,85]],["KING, Stephen","The Stand",1,[420,90,980,170]]]\n'
             'Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,270]]')
 
