@@ -140,6 +140,18 @@
       opacity: 0.8;
       text-transform: lowercase;
     }
+    .loading-cancel {
+      margin-top: 4px;
+      background: rgba(46,46,46,0.92);
+      color: #ddd;
+      border: 1px solid #555;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 9px 22px;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    .loading-cancel:active { transform: scale(0.96); }
 
     /* Results overlay */
     .results-overlay {
@@ -335,13 +347,6 @@
       font-weight: 600;
       color: #cbd5e1;
       text-align: center;
-    }
-    .bi-hint {
-      margin-top: 6px;
-      font-weight: 400;
-      font-size: 12px;
-      line-height: 1.45;
-      color: #fca5a5;
     }
     .bi-close {
       position: absolute;
@@ -904,9 +909,9 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       return cur;
     }
 
-    // Resize snapshot and return a single base64 JPEG for the API request.
-    // 2400px / q0.82: captures the high resolution needed for tiny library stickers
-    // without sacrificing too much upload speed.
+    // Resize snapshot and return a base64 JPEG string for the API request.
+    // Uses toBlob (async) instead of toDataURL so the JPEG encoding happens
+    // off the rendering deadline and doesn't freeze the page on large photos.
     function getResizedImageData(maxDim = 2400, quality = 0.82) {
       const W = snapshot.width;
       const H = snapshot.height;
@@ -925,8 +930,19 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       ctx.drawImage(resized, 0, 0);
       console.timeEnd('preprocess');
 
-      return out.toDataURL('image/jpeg', quality).split(',')[1];
+      return new Promise(resolve => {
+        out.toBlob(blob => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result.split(',')[1]);
+          reader.readAsDataURL(blob);
+        }, 'image/jpeg', quality);
+      });
     }
+
+    // Tracks the in-flight analysis so the Cancel button can abort it and so a
+    // cancelled run doesn't pop a confusing "took too long" error.
+    let analysisAbort     = null;
+    let analysisCancelled = false;
 
     function showLoading() {
       const overlay = document.createElement('div');
@@ -935,9 +951,11 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       overlay.innerHTML = `
         <div class="loading-text">
           READING SPINES…<br>
-          <span class="loading-subtext" id="loadingSubtext">(this takes around 20 seconds)</span>
-        </div>`;
+          <span class="loading-subtext" id="loadingSubtext">a full shelf can take up to a minute</span>
+        </div>
+        <button class="loading-cancel" id="loadingCancel">Cancel</button>`;
       photoArea.appendChild(overlay);
+      document.getElementById('loadingCancel').onclick = cancelAnalysis;
     }
 
     function setLoadingSubtext(text) {
@@ -949,15 +967,39 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       document.getElementById('loadingOverlay')?.remove();
     }
 
+    // Volunteer tapped Cancel — abort the request and return to the framed photo
+    // so they can retake or try again. Never leaves them stuck on the spinner.
+    function cancelAnalysis() {
+      analysisCancelled = true;
+      analysisAbort?.abort();
+      hideLoading();
+      analyzeBtn.disabled    = false;
+      analyzeBtn.textContent = 'Analyze';
+      actionBar.classList.add('show');
+    }
+
     // Call Gemini (single model, no fallback). Resolves to books array.
     // Thrown errors carry .status (HTTP code) and .noRetry (retrying can't help).
     const GEMINI_TIMEOUT_MS = 75000;
 
-    async function callGemini(prompt, image) {
+    async function callGemini(prompt, image, externalSignal) {
       const parts = [
         { text: prompt },
         { inline_data: { mime_type: 'image/jpeg', data: image } },
       ];
+
+      // Build the timeout from AbortController + setTimeout rather than
+      // AbortSignal.timeout(): the latter is missing on many mobile browsers, and
+      // without a working timeout a stalled request (most likely on a dense
+      // multi-shelf photo) hangs on "READING SPINES…" forever. externalSignal lets
+      // the Cancel button abort the same fetch.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
+      const onExternalAbort = () => controller.abort();
+      if (externalSignal) {
+        if (externalSignal.aborted) controller.abort();
+        else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+      }
 
       console.time('gemini');
       let res;
@@ -965,8 +1007,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
         res = await fetch(GEMINI_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          // Don't hang forever if the proxy or model stalls.
-          signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(GEMINI_TIMEOUT_MS) : undefined,
+          signal: controller.signal,
           body: JSON.stringify({
             model: GEMINI_MODEL,
             generationConfig: {
@@ -979,6 +1020,8 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
           })
         });
       } finally {
+        clearTimeout(timer);
+        if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort);
         console.timeEnd('gemini');
       }
 
@@ -1047,10 +1090,16 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
     async function analyzeShelf() {
       analyzeBtn.disabled    = true;
       analyzeBtn.textContent = 'Analyzing…';
+      analysisCancelled = false;
+      analysisAbort     = new AbortController();
       showLoading();
 
+      // Yield two frames so the loading overlay paints before the
+      // canvas/JPEG work blocks the thread on large photos.
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
       const tPrep0  = performance.now();
-      const image   = getResizedImageData();
+      const image   = await getResizedImageData();
       const procTime = Math.round(performance.now() - tPrep0);
       const section = getSection();
       const prompt  = buildPrompt(section);
@@ -1065,10 +1114,12 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
         }
         try {
           const tApi0 = performance.now();
-          books = await callGemini(prompt, image);
+          books = await callGemini(prompt, image, analysisAbort.signal);
           apiTime = Math.round(performance.now() - tApi0);
           break; // success, exit the retry loop
         } catch (err) {
+          // User tapped Cancel — cancelAnalysis() already reset the UI, so exit quietly.
+          if (analysisCancelled) return;
           console.warn(`Attempt ${attempt} failed:`, err);
           // Don't retry what can't succeed: blocked/truncated responses (.noRetry),
           // client errors other than 429, or being offline.
@@ -1086,6 +1137,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
         }
       }
 
+      if (analysisCancelled) return;
       hideLoading();
       // Render outside the retry loop — a rendering bug shouldn't trigger a re-call.
       showResults(books, section);
@@ -1593,7 +1645,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
           return {
             ...book, outOfOrder: false, unverifiable: true,
             idealPosition: null, shelfPosition: shelfPos,
-            shelfSize: books.length, tiedGroupSlots: null, _sortKey: null,
+            shelfSize: books.length, tiedGroupSlots: null,
           };
         }
         const ideal = idealRank.get(i) ?? null;
@@ -1610,7 +1662,6 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
           shelfPosition: shelfPos,
           shelfSize: books.length,
           tiedGroupSlots: tied,
-          _sortKey: keys[i],
         };
       });
 
@@ -1694,7 +1745,6 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       const checkedUngrouped = ungrouped.map(b => ({
         ...b, outOfOrder: false, unverifiable: true, idealPosition: null,
         shelfPosition: null, shelfSize: null, shelfIndex: -1, tiedGroupSlots: null,
-        _sortKey: null,
       }));
       return [...checkedShelves, ...checkedUngrouped];
     }
@@ -1896,34 +1946,12 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       showInspectCard(best);
     }
 
-    // Where should an out-of-order book go? Walk its in-order shelf-mates and
-    // find the two it files between. Returns a volunteer-readable sentence,
-    // or null if there's nothing trustworthy to anchor against.
-    function placementHint(book, checkedBooks) {
-      if (!book.outOfOrder || !book._sortKey) return null;
-      const mates = checkedBooks.filter(b =>
-        b !== book && b.shelfIndex === book.shelfIndex &&
-        !b.outOfOrder && !b.unverifiable && b._sortKey);
-      if (mates.length === 0) return null;
-      let prev = null, next = null;
-      for (const m of mates) {
-        if (compareKeys(m._sortKey, book._sortKey) <= 0) prev = m;
-        else if (!next) next = m;
-      }
-      const name = b => b.spine_label || b.call_number || b.title || 'the next book';
-      if (prev && next) return `Belongs between “${name(prev)}” and “${name(next)}”.`;
-      if (prev)         return `Belongs after “${name(prev)}”, toward the end of this shelf.`;
-      if (next)         return `Belongs before “${name(next)}”, at the start of this shelf.`;
-      return null;
-    }
-
     function showInspectCard(book) {
       document.getElementById('bookInspect')?.remove();
       const status = book._edgeCropped ? '⚠ Cut off at the photo edge — check it by hand, or retake with the whole spine in frame.'
                    : book.unverifiable ? "⚠ Couldn't read this spine clearly — check it by hand."
                    : book.outOfOrder    ? '⚠ Out of order — this book is in the wrong spot.'
                    :                       '✓ In order';
-      const hint = placementHint(book, lastCheckedBooks);
       const card = document.createElement('div');
       card.id = 'bookInspect';
       card.className = 'book-inspect';
@@ -1932,7 +1960,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
         <div class="bi-row"><span class="bi-key">Author</span><span class="bi-val">${escapeHtml(book.author_last) || '—'}${book._authorConflict ? ' <span style="color:#facc15;font-size:11px">(label mismatch)</span>' : ''}</span></div>
         <div class="bi-row"><span class="bi-key">Label</span><span class="bi-val">${escapeHtml(book.spine_label || book.call_number) || '—'}</span></div>
         ${book.series_volume != null ? `<div class="bi-row"><span class="bi-key">Volume</span><span class="bi-val">#${book.series_volume}</span></div>` : ''}
-        <div class="bi-status">${status}${hint ? `<div class="bi-hint">${escapeHtml(hint)}</div>` : ''}</div>
+        <div class="bi-status">${status}</div>
         <button class="bi-close" aria-label="Close">×</button>`;
       photoArea.appendChild(card);
       card.querySelector('.bi-close').addEventListener('click', () => card.remove());
@@ -2049,7 +2077,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       await new Promise(r => setTimeout(r, 50));
 
       const t0       = performance.now();
-      const image    = getResizedImageData();
+      const image    = await getResizedImageData();
       const procTime = Math.round(performance.now() - t0);
       const section  = getSection();
       const prompt   = buildPrompt(section);
@@ -2433,39 +2461,6 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       ];
       eq(detectSectionMismatch(fictionBooks, 'fiction'), null,
         'Author labels on Fiction tab → no suggestion');
-      console.groupEnd();
-
-      // ── Placement hint for out-of-order books ──
-      console.group('placementHint');
-      // CLARK misfiled after MILLER → belongs between BAKER and MILLER.
-      const phBooks = [
-        { position: 1, spine_label: 'ADAMS',  title: 'A', confidence: 'high', bounding_box: [100, 0,   900, 100] },
-        { position: 2, spine_label: 'BAKER',  title: 'B', confidence: 'high', bounding_box: [100, 100, 900, 200] },
-        { position: 3, spine_label: 'MILLER', title: 'M', confidence: 'high', bounding_box: [100, 200, 900, 300] },
-        { position: 4, spine_label: 'CLARK',  title: 'C', confidence: 'high', bounding_box: [100, 300, 900, 400] },
-        { position: 5, spine_label: 'PEREZ',  title: 'P', confidence: 'high', bounding_box: [100, 400, 900, 500] },
-      ];
-      const phResult = checkOrder(phBooks, 'fiction');
-      const phFlagged = phResult.find(b => b.outOfOrder);
-      assert(phFlagged && phFlagged.spine_label === 'CLARK', 'CLARK flagged out of order');
-      eq(placementHint(phFlagged, phResult), 'Belongs between “BAKER” and “MILLER”.',
-        'Misfiled mid-shelf book → between its two sorted neighbors');
-
-      // ADAMS shoved to the end → belongs before BAKER at the start.
-      const phBooks2 = [
-        { position: 1, spine_label: 'BAKER',  title: 'B', confidence: 'high', bounding_box: [100, 0,   900, 100] },
-        { position: 2, spine_label: 'CLARK',  title: 'C', confidence: 'high', bounding_box: [100, 100, 900, 200] },
-        { position: 3, spine_label: 'MILLER', title: 'M', confidence: 'high', bounding_box: [100, 200, 900, 300] },
-        { position: 4, spine_label: 'ADAMS',  title: 'A', confidence: 'high', bounding_box: [100, 300, 900, 400] },
-      ];
-      const phResult2 = checkOrder(phBooks2, 'fiction');
-      const phFlagged2 = phResult2.find(b => b.outOfOrder);
-      assert(phFlagged2 && phFlagged2.spine_label === 'ADAMS', 'ADAMS flagged out of order');
-      eq(placementHint(phFlagged2, phResult2), 'Belongs before “BAKER”, at the start of this shelf.',
-        'Smallest key misfiled at the end → before the first book');
-
-      // Hint never fires for in-order or unverifiable books.
-      eq(placementHint(phResult[0], phResult), null, 'In-order book → no hint');
       console.groupEnd();
 
       console.log(`\n=== Tests complete: ${pass} passed, ${fail} failed ===`);
