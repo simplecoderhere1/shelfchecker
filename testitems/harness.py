@@ -92,11 +92,14 @@ def call_gemini(prompt, b64):
     cand = cands[0]
     if cand.get("finishReason") == "MAX_TOKENS":
         raise RuntimeError("response truncated (MAX_TOKENS)")
+    if cand.get("finishReason") not in (None, "STOP"):
+        raise RuntimeError(f"model stopped unexpectedly ({cand['finishReason']})")
     raw = "".join(p.get("text", "") for p in (cand.get("content") or {}).get("parts") or [])
     raw = raw.replace("```json", "").replace("```", "").strip()
     books = json.loads(raw)
     if not isinstance(books, list):
         raise RuntimeError("model output is not a JSON array")
+    books = [b for b in books if isinstance(b, list)]   # mirrors callGemini's row filter
     return books, ms
 
 def is_edge_cropped(book):

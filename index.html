@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#1c1c1c">
   <title>ShelfCheck</title>
   <style>
     *, *::before, *::after {
@@ -187,6 +188,11 @@
       background: rgba(250, 204, 21, 0.30);
       box-shadow: 0 0 0 1px rgba(0,0,0,0.5);
     }
+    @keyframes markPulse {
+      0%, 100% { transform: scale(1); }
+      50%      { transform: scale(1.7); }
+    }
+    .label-mark.pulse { animation: markPulse 0.45s ease 3; }
 
     /* Inline error banner */
     .error-banner {
@@ -329,6 +335,13 @@
       font-weight: 600;
       color: #cbd5e1;
       text-align: center;
+    }
+    .bi-hint {
+      margin-top: 6px;
+      font-weight: 400;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #fca5a5;
     }
     .bi-close {
       position: absolute;
@@ -582,6 +595,80 @@
       transform: none;
     }
 
+    /* ── Flagged book list (below photo) ───────────────── */
+    .flagged-list {
+      display: none;
+      flex-direction: column;
+      background: #111;
+      border-top: 1px solid #2c2c2c;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      max-height: 200px;
+      flex-shrink: 0;
+    }
+    .flagged-list.show { display: flex; }
+    .flagged-list-header {
+      padding: 8px 14px 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: #555;
+      flex-shrink: 0;
+      position: sticky;
+      top: 0;
+      background: #111;
+      border-bottom: 1px solid #1e1e1e;
+    }
+    .flagged-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 14px;
+      border-bottom: 1px solid #1a1a1a;
+      cursor: pointer;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 0.12s;
+    }
+    .flagged-item:active { background: #1e1e1e; }
+    .flagged-item-dot {
+      flex-shrink: 0;
+      width: 9px; height: 9px;
+      border-radius: 50%;
+    }
+    .flagged-item-dot-bad { background: #ef4444; }
+    .flagged-item-dot-unv { background: #facc15; }
+    .flagged-item-text {
+      flex: 1;
+      min-width: 0;
+    }
+    .flagged-item-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #e2e2e2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .flagged-item-title {
+      font-size: 11px;
+      color: #666;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 1px;
+    }
+    .flagged-item-status {
+      flex-shrink: 0;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 6px;
+    }
+    .flagged-item-status-bad { background: #450a0a; color: #f87171; }
+    .flagged-item-status-unv { background: #713f12; color: #fde047; }
+
     /* ── Landscape layout ────────────────────────────────
        In landscape the vertical stack wastes height. Flip to a row:
        left sidebar (section tabs + settings) | camera | right sidebar (shutter).
@@ -664,6 +751,7 @@
       </div>
     </div>
     <!-- loading overlay, results overlay, book-inspect appended here by JS -->
+    <div class="flagged-list" id="flaggedList"></div>
   </div>
 
   <input type="file" id="photoInput"  accept="image/*" capture="environment" style="display:none">
@@ -914,6 +1002,12 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
         err.noRetry = true;   // temperature 0: the same image will truncate again
         throw err;
       }
+      if (cand.finishReason && cand.finishReason !== 'STOP') {
+        // SAFETY / RECITATION / PROHIBITED_CONTENT etc. — same image, same outcome.
+        const err = new Error(`the model stopped unexpectedly (${cand.finishReason})`);
+        err.noRetry = true;
+        throw err;
+      }
 
       const raw = (cand.content?.parts || []).map(p => p.text || '').join('');
       if (!raw) throw new Error('the model returned no text');
@@ -930,7 +1024,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       // Keep them — silently dropping them miscounts the shelf and can hide a real
       // misorder — but tag them so the order check treats them as unverifiable
       // (yellow). Top-edge crops are fine: the sticker sits at the BOTTOM of the spine.
-      return parsed.map(expandBook).map(b => {
+      return parsed.filter(Array.isArray).map(expandBook).map(b => {
         if (!b.bounding_box) return b;
         const [, xmin, ymax, xmax] = b.bounding_box;
         const cropped = xmin <= 5 || xmax >= 995 || ymax >= 995;
@@ -1499,7 +1593,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
           return {
             ...book, outOfOrder: false, unverifiable: true,
             idealPosition: null, shelfPosition: shelfPos,
-            shelfSize: books.length, tiedGroupSlots: null,
+            shelfSize: books.length, tiedGroupSlots: null, _sortKey: null,
           };
         }
         const ideal = idealRank.get(i) ?? null;
@@ -1516,6 +1610,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
           shelfPosition: shelfPos,
           shelfSize: books.length,
           tiedGroupSlots: tied,
+          _sortKey: keys[i],
         };
       });
 
@@ -1599,6 +1694,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       const checkedUngrouped = ungrouped.map(b => ({
         ...b, outOfOrder: false, unverifiable: true, idealPosition: null,
         shelfPosition: null, shelfSize: null, shelfIndex: -1, tiedGroupSlots: null,
+        _sortKey: null,
       }));
       return [...checkedShelves, ...checkedUngrouped];
     }
@@ -1639,6 +1735,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
         const labelH = Math.max(12, Math.min(r.height * 0.16, 30));
         const mark = document.createElement('div');
         mark.className = 'label-mark ' + (b.outOfOrder ? 'label-mark-bad' : 'label-mark-unv');
+        mark.dataset.bookIdx = lastCheckedBooks.indexOf(b);   // ties the mark to its list row
         mark.style.left   = `${r.left}px`;
         mark.style.top    = `${r.top + r.height - labelH}px`;
         mark.style.width  = `${r.width}px`;
@@ -1687,12 +1784,14 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       // No books detected — don't claim "all in order". Prompt a retake instead.
       if (total === 0) {
         showNoBooksBadge();
+        showFlaggedList([]);
         return;
       }
 
       enableInspect();
       renderBoxes();
       showSummaryBadge(total, outCount, unvCount);
+      showFlaggedList(checked);
 
       const suggest = detectSectionMismatch(books, section);
       if (suggest) showSectionHint(suggest);
@@ -1734,7 +1833,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
     // else all-clear green. Tap any box on the photo for that book's details.
     function showSummaryBadge(total, outCount, unvCount) {
       let badgeClass, badgeText;
-      if (outCount > 0)       { badgeClass = 'badge-warn';         badgeText = `${outCount} out of order · ${total} read`; }
+      if (outCount > 0)       { badgeClass = 'badge-warn';         badgeText = `${outCount} out of order${unvCount ? ` · ${unvCount} to check` : ''} · ${total} read`; }
       else if (unvCount > 0)  { badgeClass = 'badge-unverifiable'; badgeText = `${unvCount} to check · ${total} read`; }
       else                    { badgeClass = 'badge-ok';           badgeText = `✓ All ${total} in order`; }
 
@@ -1794,21 +1893,46 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
 
       document.getElementById('bookInspect')?.remove();
       if (!best) return;
+      showInspectCard(best);
+    }
 
-      const status = best._edgeCropped ? '⚠ Cut off at the photo edge — check it by hand, or retake with the whole spine in frame.'
-                   : best.unverifiable ? "⚠ Couldn't read this spine clearly — check it by hand."
-                   : best.outOfOrder    ? '⚠ Out of order — this book is in the wrong spot.'
+    // Where should an out-of-order book go? Walk its in-order shelf-mates and
+    // find the two it files between. Returns a volunteer-readable sentence,
+    // or null if there's nothing trustworthy to anchor against.
+    function placementHint(book, checkedBooks) {
+      if (!book.outOfOrder || !book._sortKey) return null;
+      const mates = checkedBooks.filter(b =>
+        b !== book && b.shelfIndex === book.shelfIndex &&
+        !b.outOfOrder && !b.unverifiable && b._sortKey);
+      if (mates.length === 0) return null;
+      let prev = null, next = null;
+      for (const m of mates) {
+        if (compareKeys(m._sortKey, book._sortKey) <= 0) prev = m;
+        else if (!next) next = m;
+      }
+      const name = b => b.spine_label || b.call_number || b.title || 'the next book';
+      if (prev && next) return `Belongs between “${name(prev)}” and “${name(next)}”.`;
+      if (prev)         return `Belongs after “${name(prev)}”, toward the end of this shelf.`;
+      if (next)         return `Belongs before “${name(next)}”, at the start of this shelf.`;
+      return null;
+    }
+
+    function showInspectCard(book) {
+      document.getElementById('bookInspect')?.remove();
+      const status = book._edgeCropped ? '⚠ Cut off at the photo edge — check it by hand, or retake with the whole spine in frame.'
+                   : book.unverifiable ? "⚠ Couldn't read this spine clearly — check it by hand."
+                   : book.outOfOrder    ? '⚠ Out of order — this book is in the wrong spot.'
                    :                       '✓ In order';
-
+      const hint = placementHint(book, lastCheckedBooks);
       const card = document.createElement('div');
       card.id = 'bookInspect';
       card.className = 'book-inspect';
       card.innerHTML = `
-        <div class="bi-row"><span class="bi-key">Title</span><span class="bi-val">${escapeHtml(best.title) || '—'}</span></div>
-        <div class="bi-row"><span class="bi-key">Author</span><span class="bi-val">${escapeHtml(best.author_last) || '—'}${best._authorConflict ? ' <span style="color:#facc15;font-size:11px">(label mismatch)</span>' : ''}</span></div>
-        <div class="bi-row"><span class="bi-key">Label</span><span class="bi-val">${escapeHtml(best.spine_label || best.call_number) || '—'}</span></div>
-        ${best.series_volume != null ? `<div class="bi-row"><span class="bi-key">Volume</span><span class="bi-val">#${best.series_volume}</span></div>` : ''}
-        <div class="bi-status">${status}</div>
+        <div class="bi-row"><span class="bi-key">Title</span><span class="bi-val">${escapeHtml(book.title) || '—'}</span></div>
+        <div class="bi-row"><span class="bi-key">Author</span><span class="bi-val">${escapeHtml(book.author_last) || '—'}${book._authorConflict ? ' <span style="color:#facc15;font-size:11px">(label mismatch)</span>' : ''}</span></div>
+        <div class="bi-row"><span class="bi-key">Label</span><span class="bi-val">${escapeHtml(book.spine_label || book.call_number) || '—'}</span></div>
+        ${book.series_volume != null ? `<div class="bi-row"><span class="bi-key">Volume</span><span class="bi-val">#${book.series_volume}</span></div>` : ''}
+        <div class="bi-status">${status}${hint ? `<div class="bi-hint">${escapeHtml(hint)}</div>` : ''}</div>
         <button class="bi-close" aria-label="Close">×</button>`;
       photoArea.appendChild(card);
       card.querySelector('.bi-close').addEventListener('click', () => card.remove());
@@ -1819,12 +1943,67 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
 
+    function showFlaggedList(checked) {
+      const panel = document.getElementById('flaggedList');
+      const flagged = checked.filter(b => b.outOfOrder || b.unverifiable);
+      // Always reset panel contents
+      panel.innerHTML = '';
+      if (flagged.length === 0) {
+        panel.classList.remove('show');
+        return;
+      }
+      // Only mention the shelf row when the photo actually has more than one.
+      const multiShelf = new Set(checked.map(b => b.shelfIndex).filter(i => i >= 0)).size > 1;
+      const header = document.createElement('div');
+      header.className = 'flagged-list-header';
+      header.textContent = `Flagged books (${flagged.length}) — tap one to find it`;
+      panel.appendChild(header);
+      for (const book of flagged) {
+        const isBad = book.outOfOrder;
+        const row = document.createElement('div');
+        row.className = 'flagged-item';
+        const labelText = escapeHtml(book.spine_label || book.call_number) || '—';
+        // Boxes drift sometimes — a counted position lets the volunteer find the
+        // physical book even when the highlight is off by a spine or two.
+        const posBits = [];
+        if (multiShelf && book.shelfIndex >= 0) posBits.push(`shelf ${book.shelfIndex + 1}`);
+        if (book.shelfPosition) posBits.push(`#${book.shelfPosition} of ${book.shelfSize} from left`);
+        const subBits = [escapeHtml(book.title), posBits.join(' · ')].filter(Boolean);
+        row.innerHTML = `
+          <div class="flagged-item-dot ${isBad ? 'flagged-item-dot-bad' : 'flagged-item-dot-unv'}"></div>
+          <div class="flagged-item-text">
+            <div class="flagged-item-label">${labelText}</div>
+            ${subBits.length ? `<div class="flagged-item-title">${subBits.join(' — ')}</div>` : ''}
+          </div>
+          <div class="flagged-item-status ${isBad ? 'flagged-item-status-bad' : 'flagged-item-status-unv'}">${isBad ? 'Out of order' : 'Check'}</div>`;
+        row.addEventListener('click', () => {
+          showInspectCard(book);
+          pulseMark(lastCheckedBooks.indexOf(book));
+        });
+        panel.appendChild(row);
+      }
+      panel.classList.add('show');
+    }
+
+    // Flash the photo highlight that belongs to a flagged-list row, so the
+    // volunteer can see exactly which spine the row is talking about.
+    function pulseMark(bookIdx) {
+      const mark = document.querySelector(`.label-mark[data-book-idx="${bookIdx}"]`);
+      if (!mark) return;
+      mark.classList.remove('pulse');
+      void mark.offsetWidth;   // restart the animation if it's already running
+      mark.classList.add('pulse');
+    }
+
     function newScan() {
       document.getElementById('resultsOverlay')?.remove();
       document.getElementById('bookBoxes')?.remove();
       document.getElementById('debugOverlay')?.remove();
       document.getElementById('bookInspect')?.remove();
       document.getElementById('sectionHint')?.remove();
+      const panel = document.getElementById('flaggedList');
+      panel.classList.remove('show');
+      panel.innerHTML = '';
       lastRawBooks = null;
       lastCheckedBooks = [];
       disableInspect();
@@ -2254,6 +2433,39 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       ];
       eq(detectSectionMismatch(fictionBooks, 'fiction'), null,
         'Author labels on Fiction tab → no suggestion');
+      console.groupEnd();
+
+      // ── Placement hint for out-of-order books ──
+      console.group('placementHint');
+      // CLARK misfiled after MILLER → belongs between BAKER and MILLER.
+      const phBooks = [
+        { position: 1, spine_label: 'ADAMS',  title: 'A', confidence: 'high', bounding_box: [100, 0,   900, 100] },
+        { position: 2, spine_label: 'BAKER',  title: 'B', confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { position: 3, spine_label: 'MILLER', title: 'M', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { position: 4, spine_label: 'CLARK',  title: 'C', confidence: 'high', bounding_box: [100, 300, 900, 400] },
+        { position: 5, spine_label: 'PEREZ',  title: 'P', confidence: 'high', bounding_box: [100, 400, 900, 500] },
+      ];
+      const phResult = checkOrder(phBooks, 'fiction');
+      const phFlagged = phResult.find(b => b.outOfOrder);
+      assert(phFlagged && phFlagged.spine_label === 'CLARK', 'CLARK flagged out of order');
+      eq(placementHint(phFlagged, phResult), 'Belongs between “BAKER” and “MILLER”.',
+        'Misfiled mid-shelf book → between its two sorted neighbors');
+
+      // ADAMS shoved to the end → belongs before BAKER at the start.
+      const phBooks2 = [
+        { position: 1, spine_label: 'BAKER',  title: 'B', confidence: 'high', bounding_box: [100, 0,   900, 100] },
+        { position: 2, spine_label: 'CLARK',  title: 'C', confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { position: 3, spine_label: 'MILLER', title: 'M', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { position: 4, spine_label: 'ADAMS',  title: 'A', confidence: 'high', bounding_box: [100, 300, 900, 400] },
+      ];
+      const phResult2 = checkOrder(phBooks2, 'fiction');
+      const phFlagged2 = phResult2.find(b => b.outOfOrder);
+      assert(phFlagged2 && phFlagged2.spine_label === 'ADAMS', 'ADAMS flagged out of order');
+      eq(placementHint(phFlagged2, phResult2), 'Belongs before “BAKER”, at the start of this shelf.',
+        'Smallest key misfiled at the end → before the first book');
+
+      // Hint never fires for in-order or unverifiable books.
+      eq(placementHint(phResult[0], phResult), null, 'In-order book → no hint');
       console.groupEnd();
 
       console.log(`\n=== Tests complete: ${pass} passed, ${fail} failed ===`);
