@@ -747,6 +747,9 @@
             </svg>
             Upload Image
           </button>
+          <p style="font-size:12px;color:#888;text-align:center;line-height:1.5;padding:0 8px">
+            Blurry photos or unclear spine labels may cause false or missed reports. Use good lighting and ensure labels are sharp.
+          </p>
         </div>
       </div>
       <canvas id="snapshot"></canvas>
@@ -2552,6 +2555,10 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
           <div class="first-hint-row">
             <span class="first-hint-dot" style="background:#4ade80"></span>
             <span><b>No box</b> = in order. Tap any book to see what was read.</span>
+          </div>
+          <div class="first-hint-row" style="margin-top:4px;padding-top:10px;border-top:1px solid #2c2c2c">
+            <span style="font-size:15px;flex-shrink:0;margin-top:-1px">⚠️</span>
+            <span style="color:#aaa">Blurry photos or unclear spines may cause false or missed flags. Use good lighting and get close enough that the white labels are sharp.</span>
           </div>
           <button class="first-hint-btn" id="firstHintBtn">Got it</button>
         </div>`;
