@@ -679,6 +679,47 @@
        left sidebar (section tabs + settings) | camera | right sidebar (shutter).
        The camera area fills all remaining width so you see the full shelf.
     ─────────────────────────────────────────────────── */
+    /* ── Stage-based loading ─────────────────────────── */
+    .stage-list {
+      display: flex;
+      flex-direction: column;
+      gap: 13px;
+      width: 100%;
+      max-width: 220px;
+    }
+    .stage-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .stage-icon {
+      width: 16px;
+      text-align: center;
+      font-size: 12px;
+      flex-shrink: 0;
+      color: #3a3a3a;
+    }
+    .stage-label {
+      font-size: 14px;
+      font-weight: 500;
+      color: #3a3a3a;
+      transition: color 0.2s;
+    }
+    .stage-row.s-done .stage-icon,
+    .stage-row.s-done .stage-label { color: #4ade80; }
+    .stage-row.s-active .stage-icon,
+    .stage-row.s-active .stage-label { color: #fff; }
+    .anim-dots span {
+      animation: dotPulse 1.2s ease-in-out infinite;
+      opacity: 0.2;
+    }
+    .anim-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .anim-dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes dotPulse {
+      0%, 100% { opacity: 0.2; }
+      50%       { opacity: 1;   }
+    }
+
     @media (orientation: landscape) {
       body { flex-direction: row; }
 
@@ -949,23 +990,61 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
     let analysisAbort     = null;
     let analysisCancelled = false;
 
+    const LOADING_STAGES = [
+      'Compressing image',
+      'Sending to book detector AI',
+      'AI reading spines',
+      'Checking order',
+    ];
+    let _currentStage = -1;
+
+    function _dotsHtml() {
+      return '<span class="anim-dots"><span>.</span><span>.</span><span>.</span></span>';
+    }
+
     function showLoading() {
+      _currentStage = 0;
       const overlay = document.createElement('div');
       overlay.id        = 'loadingOverlay';
       overlay.className = 'loading-overlay';
+      const rows = LOADING_STAGES.map((label, i) => `
+        <div class="stage-row${i === 0 ? ' s-active' : ''}" id="stage-row-${i}">
+          <span class="stage-icon" id="stage-icon-${i}">${i === 0 ? _dotsHtml() : '○'}</span>
+          <span class="stage-label">${label}</span>
+        </div>`).join('');
       overlay.innerHTML = `
-        <div class="loading-text">
-          READING SPINES…<br>
-          <span class="loading-subtext" id="loadingSubtext">this may take around 10 seconds, and for multiple shelves may take around 30s</span>
-        </div>
-        <button class="loading-cancel" id="loadingCancel">Cancel</button>`;
+        <div class="stage-list">${rows}</div>
+        <button class="loading-cancel" id="loadingCancel" style="margin-top:8px">Cancel</button>`;
       photoArea.appendChild(overlay);
       document.getElementById('loadingCancel').onclick = cancelAnalysis;
     }
 
-    function setLoadingSubtext(text) {
-      const el = document.getElementById('loadingSubtext');
-      if (el) el.textContent = text;
+    function advanceStage() {
+      const cur = document.getElementById(`stage-row-${_currentStage}`);
+      if (cur) {
+        cur.classList.remove('s-active');
+        cur.classList.add('s-done');
+        document.getElementById(`stage-icon-${_currentStage}`).innerHTML = '✓';
+      }
+      _currentStage++;
+      const next = document.getElementById(`stage-row-${_currentStage}`);
+      if (next) {
+        next.classList.add('s-active');
+        document.getElementById(`stage-icon-${_currentStage}`).innerHTML = _dotsHtml();
+      }
+    }
+
+    function resetStageTo(idx) {
+      LOADING_STAGES.forEach((_, i) => {
+        const row  = document.getElementById(`stage-row-${i}`);
+        const icon = document.getElementById(`stage-icon-${i}`);
+        if (!row || !icon) return;
+        row.classList.remove('s-active', 's-done');
+        if (i < idx)       { row.classList.add('s-done');   icon.innerHTML = '✓'; }
+        else if (i === idx) { row.classList.add('s-active'); icon.innerHTML = _dotsHtml(); }
+        else                { icon.innerHTML = '○'; }
+      });
+      _currentStage = idx;
     }
 
     function hideLoading() {
@@ -1006,6 +1085,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
         else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
       }
 
+      advanceStage(); // → "Gemini responding"
       console.time('gemini');
       let res;
       try {
@@ -1106,6 +1186,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       const tPrep0  = performance.now();
       const image   = await getResizedImageData();
       const procTime = Math.round(performance.now() - tPrep0);
+      advanceStage(); // → "Sending to Gemini"
       const section = getSection();
       const prompt  = buildPrompt(section);
       const maxAttempts = 2;
@@ -1113,14 +1194,13 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
 
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         if (attempt > 1) {
-          // The analyze button is hidden under the loading overlay — surface the
-          // retry status where the volunteer is actually looking.
-          setLoadingSubtext(`retrying (attempt ${attempt})…`);
+          resetStageTo(1); // back to "Sending to Gemini" for the retry
         }
         try {
           const tApi0 = performance.now();
           books = await callGemini(prompt, image, analysisAbort.signal);
           apiTime = Math.round(performance.now() - tApi0);
+          advanceStage(); // → "Checking order"
           break; // success, exit the retry loop
         } catch (err) {
           // User tapped Cancel — cancelAnalysis() already reset the UI, so exit quietly.
