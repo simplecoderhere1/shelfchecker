@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#1c1c1c">
   <title>ShelfCheck</title>
   <style>
@@ -943,13 +943,10 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
     function expandBook(arr) {
       const box = Array.isArray(arr[3]) && arr[3].length === 4 ? arr[3] : null;
       return {
-        author_last:   null,
-        title:         arr[1] ?? null,
-        spine_label:   arr[0] ?? null,
-        call_number:   null,
-        series_volume: null,
-        confidence:    Number(arr[2]) === 1 ? 'high' : 'low',   // tolerate "1" as a string
-        bounding_box:  box,
+        title:        arr[1] ?? null,
+        spine_label:  arr[0] ?? null,
+        confidence:   Number(arr[2]) === 1 ? 'high' : 'low',   // tolerate "1" as a string
+        bounding_box: box,
       };
     }
 
@@ -1432,35 +1429,6 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       return null;
     }
 
-    // ── Cross-field consistency check ──
-    // When both spine_label and author_last are present, validate that the surname
-    // from the label matches the standalone author_last field. If they disagree,
-    // prefer the spine_label (it's the pre-printed sticker, more reliable) but
-    // downgrade the book's effective confidence so the sandwich rule can catch
-    // obvious OCR misreads.
-    function reconcileAuthorFields(book) {
-      if (!book.spine_label || !book.author_last) return book;
-      const labelParsed = parseSurnameAndFirst(book.spine_label);
-      if (!labelParsed) return book;
-
-      const authorNorm = normalizeAuthor(book.author_last);
-      if (!authorNorm) return book;
-
-      // If the label surname matches the author_last, everything is consistent
-      if (labelParsed.surname === authorNorm) return book;
-
-      // Check if one is a prefix of the other (partial match like "black" vs "blackwell")
-      const shorter = labelParsed.surname.length <= authorNorm.length ? labelParsed.surname : authorNorm;
-      const longer  = labelParsed.surname.length >  authorNorm.length ? labelParsed.surname : authorNorm;
-      if (longer.startsWith(shorter) && shorter.length >= 3) return book;
-
-      // Genuine disagreement — label wins, but lower confidence
-      // The spine_label is the pre-printed library sticker; author_last might be
-      // Gemini reading the title text or a decorative font incorrectly.
-      const newConf = book.confidence === 'high' ? 'medium' : 'low';
-      return { ...book, confidence: newConf, _authorConflict: true };
-    }
-
     // Build a comparable sort key for a book given the chosen section.
     // Returns null when there's no trustworthy signal (→ rendered yellow).
     // String keys carry surname (val), first name (first), and series volume (vol).
@@ -1485,23 +1453,23 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
           const k = strKeyFromAuthorish(book.spine_label);
           if (k) return k;
         }
-        return strKeyFromAuthorish(book.author_last);
+        return null;
       }
 
       if (section === 'nonfiction') {
-        const d = parseDewey(book.spine_label) || parseDewey(book.call_number);
+        const d = parseDewey(book.spine_label);
         return d ? { kind: 'dewey', val: d, vol, title } : null;
       }
 
       // Unknown section ("auto") — infer from the label itself:
-      // numeric prefix → Dewey key, otherwise author-style, then author_last.
-      const d = parseDewey(book.spine_label) || parseDewey(book.call_number);
+      // numeric prefix → Dewey key, otherwise author-style.
+      const d = parseDewey(book.spine_label);
       if (d && d.num !== null) return { kind: 'dewey', val: d, vol, title };
       if (book.spine_label) {
         const k = strKeyFromAuthorish(book.spine_label);
         if (k) return k;
       }
-      return strKeyFromAuthorish(book.author_last);
+      return null;
     }
 
     // Compare two sort keys. Returns <0, 0, >0.
@@ -2095,9 +2063,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       card.className = 'book-inspect';
       card.innerHTML = `
         <div class="bi-row"><span class="bi-key">Title</span><span class="bi-val">${escapeHtml(book.title) || '—'}</span></div>
-        <div class="bi-row"><span class="bi-key">Author</span><span class="bi-val">${escapeHtml(book.author_last) || '—'}${book._authorConflict ? ' <span style="color:#facc15;font-size:11px">(label mismatch)</span>' : ''}</span></div>
-        <div class="bi-row"><span class="bi-key">Label</span><span class="bi-val">${escapeHtml(book.spine_label || book.call_number) || '—'}</span></div>
-        ${book.series_volume != null ? `<div class="bi-row"><span class="bi-key">Volume</span><span class="bi-val">#${book.series_volume}</span></div>` : ''}
+        <div class="bi-row"><span class="bi-key">Label</span><span class="bi-val">${escapeHtml(book.spine_label) || '—'}</span></div>
         <div class="bi-status">${status}</div>
         <button class="bi-close" aria-label="Close">×</button>`;
       photoArea.appendChild(card);
@@ -2128,7 +2094,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
         const isBad = book.outOfOrder;
         const row = document.createElement('div');
         row.className = 'flagged-item';
-        const labelText = escapeHtml(book.spine_label || book.call_number) || '—';
+        const labelText = escapeHtml(book.spine_label) || '—';
         // Boxes drift sometimes — a counted position lets the volunteer find the
         // physical book even when the highlight is off by a spine or two.
         const posBits = [];
@@ -2284,26 +2250,23 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
             <div style="overflow-x:auto">
             <table class="debug-book-table">
               <tr>
-                <th>#</th><th>Title</th><th>Author</th><th>Label</th><th>Vol</th><th>Conf</th><th>Status</th>
+                <th>#</th><th>Title</th><th>Label</th><th>Conf</th><th>Status</th>
               </tr>`;
 
           for (const b of checked) {
             const cls = b.outOfOrder ? 'book-bad' : b.unverifiable ? 'book-unv' : 'book-ok';
-            const confColor = b.confidence === 'high' ? '#4ade80' : b.confidence === 'medium' ? '#facc15' : '#f87171';
+            const confColor = b.confidence === 'high' ? '#4ade80' : '#f87171';
             const status = b.outOfOrder
               ? `<span style="color:#ef4444">Move → ${b.idealPosition || '?'}</span>`
               : b.unverifiable
               ? '<span style="color:#facc15">?</span>'
               : '<span style="color:#4ade80">OK</span>';
-            const conflict = b._authorConflict ? ' <span style="color:#facc15" title="Label/author mismatch">!</span>' : '';
 
             tableHtml += `
               <tr class="${cls}">
                 <td>${b.shelfPosition ?? b.position ?? '—'}</td>
                 <td>${escapeHtml(b.title) || '—'}</td>
-                <td>${escapeHtml(b.author_last) || '—'}${conflict}</td>
                 <td>${escapeHtml(b.spine_label) || '—'}</td>
-                <td>${b.series_volume != null ? b.series_volume : '—'}</td>
                 <td><span class="debug-conf-dot" style="background:${confColor}"></span>${b.confidence || '—'}</td>
                 <td>${status}</td>
               </tr>`;
@@ -2432,32 +2395,14 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       eq(extractVolume({}), null, 'Empty book');
       console.groupEnd();
 
-      // ── reconcileAuthorFields ──
-      console.group('reconcileAuthorFields');
-      let book1 = { spine_label: 'BLACK, Cara', author_last: 'Black', confidence: 'high' };
-      eq(reconcileAuthorFields(book1).confidence, 'high', 'Consistent fields — no change');
-
-      let book2 = { spine_label: 'KING, Stephen', author_last: 'Patterson', confidence: 'high' };
-      let rec2 = reconcileAuthorFields(book2);
-      eq(rec2.confidence, 'medium', 'Conflicting fields — downgraded');
-      eq(rec2._authorConflict, true, 'Conflict flag set');
-
-      let book3 = { spine_label: 'BLACK, Cara', author_last: 'Blackwell', confidence: 'high' };
-      eq(reconcileAuthorFields(book3).confidence, 'high', 'Prefix match — no downgrade');
-
-      let book4 = { author_last: 'Black', confidence: 'high' };
-      eq(reconcileAuthorFields(book4).confidence, 'high', 'No label — no change');
-      console.groupEnd();
-
       // ── sortKey ──
       console.group('sortKey');
-      let sk1 = sortKey({ spine_label: 'BLACK, Cara', author_last: 'Black', title: 'Murder' }, 'fiction');
+      let sk1 = sortKey({ spine_label: 'BLACK, Cara', title: 'Murder' }, 'fiction');
       eq(sk1.kind, 'str', 'Fiction + label → str key');
       eq(sk1.val, 'black', 'Fiction label surname');
       eq(sk1.first, 'cara', 'Fiction label first name');
 
-      let sk2 = sortKey({ author_last: 'Patterson', title: 'Max Ride' }, 'fiction');
-      eq(sk2.val, 'patterson', 'Fiction fallback to author_last');
+      eq(sortKey({ title: 'Max Ride' }, 'fiction'), null, 'Fiction no label → null');
 
       let sk3 = sortKey({ spine_label: '973.7 HAR' }, 'nonfiction');
       eq(sk3.kind, 'dewey', 'Nonfiction Dewey key');
