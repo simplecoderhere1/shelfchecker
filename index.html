@@ -166,7 +166,12 @@
       align-items: center;
       justify-content: space-between;
       gap: 12px;
+      /* Let taps on the gradient fall through to the photo for inspect — the
+         labels of bottom-row spines sit right under this bar. The button keeps
+         its own pointer events so it stays tappable. */
+      pointer-events: none;
     }
+    .results-overlay .btn-new-scan { pointer-events: auto; }
 
     .overlay-badge {
       font-size: 14px;
@@ -845,18 +850,32 @@
     } catch {}
 
     // ── Photo picker ──────────────────────────────────────
+    // Cap the canvas dimension so huge phone photos (modern phones shoot 48MP+)
+    // stay under the browser's canvas-area limit (~16.7M px on Safari). Past it,
+    // drawImage silently yields a BLANK canvas and we'd ship garbage to Gemini.
+    // The displayed image and the 0–1000 normalized boxes are unaffected by the
+    // cap, and 3000px is still well above what the API request downscales to.
+    const MAX_CANVAS_DIM = 3000;
+
     function loadPhoto(file) {
       const url = URL.createObjectURL(file);
       const img = new Image();
       img.onload = () => {
-        snapshot.width  = img.naturalWidth;
-        snapshot.height = img.naturalHeight;
-        snapshot.getContext('2d').drawImage(img, 0, 0);
+        const scale = Math.min(1, MAX_CANVAS_DIM / Math.max(img.naturalWidth, img.naturalHeight));
+        snapshot.width  = Math.round(img.naturalWidth  * scale);
+        snapshot.height = Math.round(img.naturalHeight * scale);
+        snapshot.getContext('2d').drawImage(img, 0, 0, snapshot.width, snapshot.height);
         URL.revokeObjectURL(url);
         photoPlaceholder.style.display = 'none';
         snapshot.style.display         = 'block';
         actionBar.classList.add('show');
         analyzeBtn.disabled = false;
+      };
+      // A corrupt file or an unsupported format (e.g. some HEIC) never fires
+      // onload — tell the volunteer instead of silently doing nothing.
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        showErrorBanner("Couldn't open that image — try another photo (JPEG or PNG).", retake);
       };
       img.src = url;
     }
@@ -976,10 +995,15 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       ctx.drawImage(resized, 0, 0);
       console.timeEnd('preprocess');
 
-      return new Promise(resolve => {
+      return new Promise((resolve, reject) => {
         out.toBlob(blob => {
+          // toBlob hands back null if the canvas is too large or tainted —
+          // reject so analyzeShelf can surface an error instead of the loading
+          // overlay spinning on "Compressing image" indefinitely.
+          if (!blob) { reject(new Error('image encoding failed')); return; }
           const reader = new FileReader();
           reader.onloadend = () => resolve(reader.result.split(',')[1]);
+          reader.onerror = () => reject(new Error('image read failed'));
           reader.readAsDataURL(blob);
         }, 'image/jpeg', quality);
       });
@@ -1184,7 +1208,17 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
       const tPrep0  = performance.now();
-      const image   = await getResizedImageData();
+      let image;
+      try {
+        image = await getResizedImageData();
+      } catch (err) {
+        if (analysisCancelled) return;
+        hideLoading();
+        showErrorBanner('Could not prepare the photo. Try retaking it.', () => analyzeShelf());
+        analyzeBtn.disabled    = false;
+        analyzeBtn.textContent = 'Analyze';
+        return;
+      }
       const procTime = Math.round(performance.now() - tPrep0);
       advanceStage(); // → "Sending to Gemini"
       const section = getSection();
@@ -1368,14 +1402,21 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       return { surname: surname || lettersLower(tokens[tokens.length - 1]), first };
     }
 
-    // Parse a Dewey/cutter label like "973.7 HAR" or "KIN"
+    // Parse a Dewey/cutter label like "973.7 HAR" or "KIN".
+    // Numbered labels → { num, cut } where cut is the author cutter.
+    // Letter-only labels (biography "B LINCOLN", bare cutter "KIN") have no
+    // number, so fold ALL their letters into `cut` — otherwise two letter-only
+    // labels both got cut='' and always compared equal, meaning biography /
+    // cutter-only shelves were silently never checked for order.
     function parseDewey(s) {
       if (!s) return null;
       const m = s.match(/^\s*([0-9]+(?:\.[0-9]+)?|[A-Za-z]+)\s*([A-Za-z]+)?/i);
       if (!m) return null;
       const num = isNaN(parseFloat(m[1])) ? null : parseFloat(m[1]);
-      const cut = (m[2] || '').toLowerCase();
-      return { num, cut, prefix: m[1].toLowerCase() };
+      const prefix = m[1].toLowerCase();
+      let cut = (m[2] || '').toLowerCase();
+      if (num === null) cut = (prefix + cut).replace(/[^a-z]/g, '');
+      return { num, cut, prefix };
     }
 
     // Pull a numeric series volume from either the explicit field or a parse of the label.
@@ -1487,9 +1528,12 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
         cmp = a.val.localeCompare(b.val, undefined, { sensitivity: 'base' });
       } else {
         const A = a.val, B = b.val;
-        // Strictly compare Dewey numbers. nulls sort to the beginning.
-        const an = A.num === null ? -Infinity : A.num;
-        const bn = B.num === null ? -Infinity : B.num;
+        // Compare Dewey numbers. Letter-only labels (num null) aren't part of the
+        // 000–999 sequence — sort them AFTER numbered books (special sections like
+        // biography conventionally shelve after the numbered run), then break ties
+        // on the cutter letters so a letter-only shelf still gets ordered.
+        const an = A.num === null ? Infinity : A.num;
+        const bn = B.num === null ? Infinity : B.num;
         cmp = an !== bn ? an - bn : A.cut.localeCompare(B.cut, undefined, { sensitivity: 'base' });
       }
       if (cmp !== 0) return cmp;
@@ -2370,8 +2414,10 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       console.group('parseDewey');
       deepEq(parseDewey('973.7 HAR'), { num: 973.7, cut: 'har', prefix: '973.7' },
         'Standard Dewey with cutter');
-      deepEq(parseDewey('KIN'), { num: null, cut: '', prefix: 'kin' },
-        'Author cutter only');
+      deepEq(parseDewey('KIN'), { num: null, cut: 'kin', prefix: 'kin' },
+        'Author cutter only — letters fold into cut so it can be ordered');
+      deepEq(parseDewey('B LINCOLN'), { num: null, cut: 'blincoln', prefix: 'b' },
+        'Biography label — all letters fold into cut');
       deepEq(parseDewey('813 PAT'), { num: 813, cut: 'pat', prefix: '813' },
         'Dewey integer with cutter');
       eq(parseDewey(null), null, 'null');
@@ -2559,6 +2605,35 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       const dupDeweyResult = checkOrder(dupDeweyBooks, 'nonfiction');
       assert(dupDeweyResult.every(b => !b.outOfOrder),
         'GAL ≤ GAR ×4 (any title order) ≤ GET → nothing flagged out of order');
+      console.groupEnd();
+
+      // ── Letter-only Dewey labels (biography section) are actually checked ──
+      console.group('checkOrder (letter-only Dewey)');
+      const bioOk = [
+        { spine_label: 'B ADAMS',     title: 'A', confidence: 'high', bounding_box: [100, 0,   900, 100] },
+        { spine_label: 'B CHURCHILL', title: 'C', confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { spine_label: 'B LINCOLN',   title: 'L', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      assert(checkOrder(bioOk, 'nonfiction').every(b => !b.outOfOrder),
+        'In-order biography shelf (ADAMS<CHURCHILL<LINCOLN) → nothing flagged');
+
+      const bioBad = [
+        { spine_label: 'B ADAMS',     title: 'A', confidence: 'high', bounding_box: [100, 0,   900, 100] },
+        { spine_label: 'B WILSON',    title: 'W', confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { spine_label: 'B CHURCHILL', title: 'C', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      assert(checkOrder(bioBad, 'nonfiction').some(b => b.outOfOrder),
+        'Out-of-order biography (WILSON before CHURCHILL) → flagged (was a silent miss before)');
+
+      // Numbered run followed by a biography section must NOT false-flag the B's.
+      const mixedNF = [
+        { spine_label: '973.7 HAR', title: 'H', confidence: 'high', bounding_box: [100, 0,   900, 100] },
+        { spine_label: '973.8 KIN', title: 'K', confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { spine_label: 'B ADAMS',   title: 'A', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { spine_label: 'B LINCOLN', title: 'L', confidence: 'high', bounding_box: [100, 300, 900, 400] },
+      ];
+      assert(checkOrder(mixedNF, 'nonfiction').every(b => !b.outOfOrder),
+        'Numbered Dewey run then biography section → nothing flagged');
       console.groupEnd();
 
       // ── Low-confidence label: fiction ──
