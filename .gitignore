@@ -1,8 +1,9 @@
-
 # server has its own git repo (deployed separately to HF Spaces)
 server/
 
-# generated harness output
-testitems/out_*.json
-testitems/__pycache__/
+# local dev / testing — not part of the deployed app
+testitems/
+testitems.zip
+plan.md
+.claude/
 __pycache__/
