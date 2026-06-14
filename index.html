@@ -126,20 +126,6 @@
       gap: 20px;
       padding: 0 32px;
     }
-    .loading-text {
-      color: #fff;
-      font-size: 14px;
-      font-weight: 600;
-      letter-spacing: 0.06em;
-      text-align: center;
-      line-height: 1.6;
-    }
-    .loading-subtext {
-      font-size: 12px;
-      font-weight: 400;
-      opacity: 0.8;
-      text-transform: lowercase;
-    }
     .loading-cancel {
       margin-top: 4px;
       background: rgba(46,46,46,0.92);
@@ -706,7 +692,10 @@
     }
     .stage-label {
       font-size: 14px;
-      font-weight: 500;
+      /* 600 maps to a real Segoe UI Semibold / Roboto Medium face; 500 has no
+         matching face on Windows and silently falls back to Regular, which read
+         as inconsistent ("a bit off") next to the rest of the app's 600 text. */
+      font-weight: 600;
       color: #3a3a3a;
       transition: color 0.2s;
     }
