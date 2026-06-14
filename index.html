@@ -766,6 +766,112 @@
       text-decoration: underline;
       padding: 4px 8px;
     }
+
+    /* ── Live in-app camera ──────────────────────────── */
+    .camera-live {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 70;
+      background: #000;
+      overflow: hidden;
+      touch-action: none;
+    }
+    .camera-live.show { display: block; }
+    .camera-live video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform-origin: center center;
+    }
+    /* Dimmed regions above and below the capture band */
+    .cam-mask {
+      position: absolute;
+      left: 0; right: 0;
+      background: rgba(0, 0, 0, 0.62);
+      pointer-events: none;
+    }
+    #camMaskTop { top: 0; }
+    #camMaskBot { bottom: 0; }
+    .cam-band {
+      position: absolute;
+      left: 0; right: 0;
+      border-top: 2px solid rgba(255, 255, 255, 0.95);
+      border-bottom: 2px solid rgba(255, 255, 255, 0.95);
+      pointer-events: none;
+    }
+    .cam-band-hint {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 12px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.9);
+      background: rgba(0, 0, 0, 0.4);
+      padding: 4px 12px;
+      border-radius: 20px;
+      white-space: nowrap;
+    }
+    /* Drag handles centered on each band edge */
+    .cam-handle {
+      position: absolute;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 72px; height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: ns-resize;
+      touch-action: none;
+      z-index: 2;
+    }
+    .cam-handle::after {
+      content: '';
+      width: 42px; height: 5px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.95);
+      box-shadow: 0 0 5px rgba(0, 0, 0, 0.6);
+    }
+    .cam-controls {
+      position: absolute;
+      left: 0; right: 0;
+      bottom: 0;
+      padding: 16px 20px;
+      padding-bottom: max(16px, env(safe-area-inset-bottom));
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      z-index: 3;
+      background: linear-gradient(transparent, rgba(0, 0, 0, 0.55));
+    }
+    .cam-zoom { width: min(70%, 320px); accent-color: #fff; }
+    .cam-shutter {
+      width: 68px; height: 68px;
+      border-radius: 50%;
+      border: 4px solid rgba(255, 255, 255, 0.9);
+      background: #fff;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: transform 0.1s ease;
+    }
+    .cam-shutter:active { transform: scale(0.94); }
+    .cam-close {
+      position: absolute;
+      top: max(12px, env(safe-area-inset-top));
+      left: max(12px, env(safe-area-inset-left));
+      z-index: 3;
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(0, 0, 0, 0.5);
+      color: #fff;
+      font-size: 24px;
+      line-height: 1;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -838,6 +944,24 @@
     <p class="landscape-gate-sub">Fit <strong>one shelf row</strong> in frame.<br>Keep other shelves out of view.</p>
     <p class="landscape-gate-auto">Camera opens automatically when you rotate.</p>
     <button class="landscape-gate-skip" id="landscapeSkip">Shoot in portrait anyway</button>
+  </div>
+
+  <!-- Live in-app camera: full-screen feed with a wide horizontal capture band.
+       Only the band region is sent to Gemini, so the shelves above/below are cut out. -->
+  <div class="camera-live" id="cameraLive">
+    <video id="cameraVideo" playsinline autoplay muted></video>
+    <div class="cam-mask" id="camMaskTop"></div>
+    <div class="cam-mask" id="camMaskBot"></div>
+    <div class="cam-band" id="camBand">
+      <span class="cam-band-hint">Fit ONE shelf row inside the band</span>
+    </div>
+    <div class="cam-handle" id="camHandleTop"></div>
+    <div class="cam-handle" id="camHandleBot"></div>
+    <button class="cam-close" id="camClose" aria-label="Close camera">&times;</button>
+    <div class="cam-controls">
+      <input type="range" class="cam-zoom" id="camZoom" min="1" max="4" step="0.1" value="1" aria-label="Zoom">
+      <button class="cam-shutter" id="camShutter" aria-label="Take photo"></button>
+    </div>
   </div>
 
   <input type="file" id="photoInput"  accept="image/*" capture="environment" style="display:none">
@@ -933,22 +1057,151 @@
       return smallerScreenDim <= 500 && window.innerHeight > window.innerWidth;
     }
 
-    function _openCamera() {
-      landscapeGate.classList.remove('show');
-      photoInput.click();
+    takePicBtn.addEventListener('click', () => {
+      if (_isPortraitMobile()) landscapeGate.classList.add('show');
+      else openLiveCamera();
+    });
+    document.getElementById('landscapeSkip').addEventListener('click', () => openLiveCamera());
+    // Auto-advance into the camera the moment they rotate to landscape.
+    window.addEventListener('resize', () => {
+      if (landscapeGate.classList.contains('show') && !_isPortraitMobile()) openLiveCamera();
+    });
+
+    // ── Live in-app camera ──────────────────────────────
+    // A full-screen getUserMedia feed with a draggable horizontal band. Only the
+    // pixels inside the band are captured (at the sensor's native resolution), so
+    // the shelves above and below are physically excluded from what Gemini sees.
+    const cameraLive   = document.getElementById('cameraLive');
+    const cameraVideo  = document.getElementById('cameraVideo');
+    const camMaskTop   = document.getElementById('camMaskTop');
+    const camMaskBot   = document.getElementById('camMaskBot');
+    const camBand      = document.getElementById('camBand');
+    const camHandleTop = document.getElementById('camHandleTop');
+    const camHandleBot = document.getElementById('camHandleBot');
+    const camZoomInput = document.getElementById('camZoom');
+    const camShutter   = document.getElementById('camShutter');
+    const camClose     = document.getElementById('camClose');
+
+    let cameraStream = null;
+    let camZoom = 1;                                  // digital zoom (CSS scale on the video)
+    let bandTopFrac = 0.36, bandBotFrac = 0.64;       // band edges as fractions of camera height
+    const BAND_MIN_GAP = 0.10;
+    try {
+      const saved = JSON.parse(localStorage.getItem('shelfcheck.band') || 'null');
+      if (saved && saved.t < saved.b) { bandTopFrac = saved.t; bandBotFrac = saved.b; }
+    } catch {}
+
+    function applyBand() {
+      const h = cameraLive.clientHeight || window.innerHeight;
+      const topPx = bandTopFrac * h, botPx = bandBotFrac * h;
+      camMaskTop.style.height = topPx + 'px';
+      camMaskBot.style.top    = botPx + 'px';
+      camBand.style.top    = topPx + 'px';
+      camBand.style.height = (botPx - topPx) + 'px';
+      camHandleTop.style.top = topPx + 'px';
+      camHandleBot.style.top = botPx + 'px';
     }
 
-    takePicBtn.addEventListener('click', () => {
-      if (_isPortraitMobile()) {
-        landscapeGate.classList.add('show');
-      } else {
+    function setZoom(z) {
+      camZoom = Math.min(4, Math.max(1, z));
+      cameraVideo.style.transform = `scale(${camZoom})`;
+      camZoomInput.value = camZoom;
+    }
+
+    async function openLiveCamera() {
+      landscapeGate.classList.remove('show');
+      // No camera API (or insecure context) → fall back to the OS camera picker.
+      if (!navigator.mediaDevices?.getUserMedia) { photoInput.click(); return; }
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } },
+          audio: false,
+        });
+      } catch {
+        // Permission denied / no camera → fall back to the OS picker so the
+        // volunteer is never stuck.
         photoInput.click();
+        return;
       }
+      cameraStream = stream;
+      cameraVideo.srcObject = stream;
+      setZoom(1);
+      cameraLive.classList.add('show');
+      applyBand();
+      try { await cameraVideo.play(); } catch {}
+    }
+
+    function closeLiveCamera() {
+      cameraLive.classList.remove('show');
+      if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
+      cameraVideo.srcObject = null;
+    }
+
+    // Map the on-screen band to native video pixels (accounting for object-fit:cover
+    // centering + digital zoom), crop just that strip, and hand it to the still pipeline.
+    function captureFromCamera() {
+      const vw = cameraVideo.videoWidth, vh = cameraVideo.videoHeight;
+      const dispW = cameraLive.clientWidth, dispH = cameraLive.clientHeight;
+      if (!vw || !vh) { showErrorBanner("Camera isn't ready yet — try again.", () => openLiveCamera()); return; }
+      const cover = Math.max(dispW / vw, dispH / vh);   // object-fit: cover scale
+      const eff = cover * camZoom;
+      const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+      const toVidX = px => vw / 2 + (px - dispW / 2) / eff;
+      const toVidY = py => vh / 2 + (py - dispH / 2) / eff;
+      const topPx = bandTopFrac * dispH, botPx = bandBotFrac * dispH;
+      const sx  = clamp(toVidX(0),     0, vw);
+      const sx2 = clamp(toVidX(dispW), 0, vw);
+      const sy  = clamp(toVidY(topPx), 0, vh);
+      const sy2 = clamp(toVidY(botPx), 0, vh);
+      const sw = Math.max(1, sx2 - sx), sh = Math.max(1, sy2 - sy);
+
+      const scale = Math.min(1, MAX_CANVAS_DIM / Math.max(sw, sh));
+      snapshot.width  = Math.round(sw * scale);
+      snapshot.height = Math.round(sh * scale);
+      snapshot.getContext('2d').drawImage(cameraVideo, sx, sy, sw, sh, 0, 0, snapshot.width, snapshot.height);
+
+      closeLiveCamera();
+      // Mirror loadPhoto's onload tail: show the still and pre-encode for Analyze.
+      photoPlaceholder.style.display = 'none';
+      snapshot.style.display         = 'block';
+      actionBar.classList.add('show');
+      analyzeBtn.disabled = false;
+      pendingEncode = getResizedImageData();
+    }
+
+    // Band edge dragging (pointer events cover mouse + touch).
+    let dragEdge = null;
+    camHandleTop.addEventListener('pointerdown', e => { dragEdge = 'top'; e.preventDefault(); });
+    camHandleBot.addEventListener('pointerdown', e => { dragEdge = 'bot'; e.preventDefault(); });
+    document.addEventListener('pointermove', e => {
+      if (!dragEdge) return;
+      const rect = cameraLive.getBoundingClientRect();
+      const frac = (e.clientY - rect.top) / rect.height;
+      if (dragEdge === 'top') bandTopFrac = Math.min(bandBotFrac - BAND_MIN_GAP, Math.max(0, frac));
+      else                    bandBotFrac = Math.min(1, Math.max(bandTopFrac + BAND_MIN_GAP, frac));
+      applyBand();
     });
-    document.getElementById('landscapeSkip').addEventListener('click', _openCamera);
-    window.addEventListener('resize', () => {
-      if (landscapeGate.classList.contains('show') && !_isPortraitMobile()) _openCamera();
+    document.addEventListener('pointerup', () => {
+      if (!dragEdge) return;
+      dragEdge = null;
+      try { localStorage.setItem('shelfcheck.band', JSON.stringify({ t: bandTopFrac, b: bandBotFrac })); } catch {}
     });
+
+    // Pinch-to-zoom (digital).
+    let pinchDist = 0, pinchZoom = 1;
+    const touchDist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    cameraLive.addEventListener('touchstart', e => {
+      if (e.touches.length === 2) { pinchDist = touchDist(e.touches); pinchZoom = camZoom; }
+    }, { passive: false });
+    cameraLive.addEventListener('touchmove', e => {
+      if (e.touches.length === 2 && pinchDist) { e.preventDefault(); setZoom(pinchZoom * touchDist(e.touches) / pinchDist); }
+    }, { passive: false });
+
+    camZoomInput.addEventListener('input', () => setZoom(parseFloat(camZoomInput.value)));
+    camShutter.addEventListener('click', captureFromCamera);
+    camClose.addEventListener('click', closeLiveCamera);
+    window.addEventListener('resize', () => { if (cameraLive.classList.contains('show')) applyBand(); });
 
     uploadPicBtn.addEventListener('click', () => uploadInput.click());
     retakeBtn.addEventListener('click', retake);
