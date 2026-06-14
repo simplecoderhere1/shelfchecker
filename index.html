@@ -2058,7 +2058,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, 0]`;
     }
 
     // Bottom summary: red count of out-of-order books, else yellow count to check,
-    // else all-clear green. Tap any box on the photo for that book's details.
+    // else all-clear green.
     function showSummaryBadge(total, outCount, unvCount) {
       let badgeClass, badgeText;
       if (outCount > 0)       { badgeClass = 'badge-warn';         badgeText = `${outCount} out of order${unvCount ? ` · ${unvCount} to check` : ''} · ${total} read`; }
@@ -2075,22 +2075,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, 0]`;
     }
 
 
-    function showInspectCard(book) {
-      document.getElementById('bookInspect')?.remove();
-      const status = book.unverifiable ? "⚠ Couldn't read this spine clearly — check it by hand."
-                   : book.outOfOrder   ? '⚠ Out of order — this book is in the wrong spot.'
-                   :                     '✓ In order';
-      const card = document.createElement('div');
-      card.id = 'bookInspect';
-      card.className = 'book-inspect';
-      card.innerHTML = `
-        <div class="bi-row"><span class="bi-key">Title</span><span class="bi-val">${escapeHtml(book.title) || '—'}</span></div>
-        <div class="bi-row"><span class="bi-key">Label</span><span class="bi-val">${escapeHtml(book.spine_label) || '—'}</span></div>
-        <div class="bi-status">${status}</div>
-        <button class="bi-close" aria-label="Close">×</button>`;
-      photoArea.appendChild(card);
-      card.querySelector('.bi-close').addEventListener('click', () => card.remove());
-    }
+
 
     function escapeHtml(s) {
       if (s == null) return '';
@@ -2110,7 +2095,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, 0]`;
       const multiShelf = new Set(checked.map(b => b.shelfIndex).filter(i => i >= 0)).size > 1;
       const header = document.createElement('div');
       header.className = 'flagged-list-header';
-      header.textContent = `Flagged books (${flagged.length}) — tap one to find it`;
+      header.textContent = `Flagged books (${flagged.length})`;
       panel.appendChild(header);
       for (const book of flagged) {
         const isBad = book.outOfOrder;
@@ -2130,9 +2115,6 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, 0]`;
             ${subBits.length ? `<div class="flagged-item-title">${subBits.join(' — ')}</div>` : ''}
           </div>
           <div class="flagged-item-status ${isBad ? 'flagged-item-status-bad' : 'flagged-item-status-unv'}">${isBad ? 'Out of order' : 'Check'}</div>`;
-        row.addEventListener('click', () => {
-          showInspectCard(book);
-        });
         panel.appendChild(row);
       }
       panel.classList.add('show');
@@ -2684,7 +2666,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, 0]`;
           </div>
           <div class="first-hint-row">
             <span class="first-hint-dot" style="background:#4ade80"></span>
-            <span><b>No flag</b> = in order. Tap any flagged book in the list to see what was read.</span>
+            <span><b>No flag</b> = in order.</span>
           </div>
           <div class="first-hint-row" style="margin-top:4px;padding-top:10px;border-top:1px solid #2c2c2c">
             <span style="font-size:15px;flex-shrink:0;margin-top:-1px">⚠️</span>
