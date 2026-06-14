@@ -710,6 +710,62 @@
       .pick-btns { flex-direction: row; max-width: none; padding: 0 16px; }
       .action-bar { flex-direction: row; }
     }
+
+    /* ── Landscape gate ──────────────────────────────── */
+    .landscape-gate {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      background: #0d0d0d;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      padding: 40px 32px;
+      text-align: center;
+    }
+    .landscape-gate.show { display: flex; }
+    .landscape-gate-phone {
+      animation: lsPhoneRotate 2.8s ease-in-out infinite;
+      color: #2563eb;
+    }
+    @keyframes lsPhoneRotate {
+      0%   { transform: rotate(0deg); }
+      20%  { transform: rotate(0deg); }
+      50%  { transform: rotate(-90deg); }
+      80%  { transform: rotate(-90deg); }
+      100% { transform: rotate(0deg); }
+    }
+    .landscape-gate h2 {
+      font-size: 22px;
+      font-weight: 700;
+      color: #fff;
+      margin: 0;
+    }
+    .landscape-gate-sub {
+      font-size: 15px;
+      color: #aaa;
+      max-width: 280px;
+      line-height: 1.55;
+      margin: 0;
+    }
+    .landscape-gate-sub strong { color: #f0f0f0; }
+    .landscape-gate-auto {
+      font-size: 12px;
+      color: #555;
+      margin-top: 4px;
+    }
+    .landscape-gate-skip {
+      margin-top: 12px;
+      background: none;
+      border: none;
+      color: #444;
+      font-size: 12px;
+      cursor: pointer;
+      text-decoration: underline;
+      padding: 4px 8px;
+    }
   </style>
 </head>
 <body>
@@ -768,6 +824,20 @@
     </div>
     <!-- loading overlay, results overlay, book-inspect appended here by JS -->
     <div class="flagged-list" id="flaggedList"></div>
+  </div>
+
+  <!-- Landscape gate: shown when volunteer taps Take Photo while in portrait -->
+  <div class="landscape-gate" id="landscapeGate">
+    <svg class="landscape-gate-phone" xmlns="http://www.w3.org/2000/svg" width="80" height="80"
+         viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+         stroke-linecap="round" stroke-linejoin="round">
+      <rect x="5" y="2" width="14" height="20" rx="2.5"/>
+      <circle cx="12" cy="17.5" r="0.5" fill="currentColor" stroke="none"/>
+    </svg>
+    <h2>Turn your phone sideways</h2>
+    <p class="landscape-gate-sub">Fit <strong>one shelf row</strong> in frame.<br>Keep other shelves out of view.</p>
+    <p class="landscape-gate-auto">Camera opens automatically when you rotate.</p>
+    <button class="landscape-gate-skip" id="landscapeSkip">Shoot in portrait anyway</button>
   </div>
 
   <input type="file" id="photoInput"  accept="image/*" capture="environment" style="display:none">
@@ -856,7 +926,30 @@
       document.getElementById('errorBanner')?.remove();
     }
 
-    takePicBtn.addEventListener('click', () => photoInput.click());
+    const landscapeGate = document.getElementById('landscapeGate');
+
+    function _isPortraitMobile() {
+      const smallerScreenDim = Math.min(screen.width, screen.height);
+      return smallerScreenDim <= 500 && window.innerHeight > window.innerWidth;
+    }
+
+    function _openCamera() {
+      landscapeGate.classList.remove('show');
+      photoInput.click();
+    }
+
+    takePicBtn.addEventListener('click', () => {
+      if (_isPortraitMobile()) {
+        landscapeGate.classList.add('show');
+      } else {
+        photoInput.click();
+      }
+    });
+    document.getElementById('landscapeSkip').addEventListener('click', _openCamera);
+    window.addEventListener('resize', () => {
+      if (landscapeGate.classList.contains('show') && !_isPortraitMobile()) _openCamera();
+    });
+
     uploadPicBtn.addEventListener('click', () => uploadInput.click());
     retakeBtn.addEventListener('click', retake);
     photoInput.addEventListener('change',  () => { if (photoInput.files[0])  loadPhoto(photoInput.files[0]); });
