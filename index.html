@@ -169,33 +169,6 @@
     .badge-warn         { background: #450a0a; color: #f87171; }
     .badge-unverifiable { background: #713f12; color: #fde047; }
 
-    /* Small highlight over the white label at the foot of a flagged spine */
-    .book-boxes {
-      position: absolute;
-      inset: 0;
-      z-index: 19;
-      pointer-events: none;   /* taps fall through to the snapshot for inspect */
-    }
-    .label-mark {
-      position: absolute;
-      border-radius: 3px;
-      box-sizing: border-box;
-    }
-    .label-mark-bad {
-      border: 2px solid #ef4444;
-      background: rgba(239, 68, 68, 0.35);
-      box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 0 10px rgba(239,68,68,0.6);
-    }
-    .label-mark-unv {
-      border: 2px solid #facc15;
-      background: rgba(250, 204, 21, 0.30);
-      box-shadow: 0 0 0 1px rgba(0,0,0,0.5);
-    }
-    @keyframes markPulse {
-      0%, 100% { transform: scale(1); }
-      50%      { transform: scale(1.7); }
-    }
-    .label-mark.pulse { animation: markPulse 0.45s ease 3; }
 
     /* Inline error banner */
     .error-banner {
@@ -859,6 +832,8 @@
         snapshot.style.display         = 'block';
         actionBar.classList.add('show');
         analyzeBtn.disabled = false;
+        // Kick off JPEG encoding now so it's done by the time the volunteer taps Analyze.
+        pendingEncode = getResizedImageData();
       };
       // A corrupt file or an unsupported format (e.g. some HEIC) never fires
       // onload — tell the volunteer instead of silently doing nothing.
@@ -877,6 +852,7 @@
       analyzeBtn.textContent = 'Analyze';
       photoInput.value       = '';
       uploadInput.value      = '';
+      pendingEncode          = null;
       document.getElementById('errorBanner')?.remove();
     }
 
@@ -904,13 +880,13 @@ Each inner array has exactly 4 elements:
 0: full text on the white sticker at the bottom of the spine (e.g. "973.7 HAR", "KIN"), or null if unreadable.
 1: book title from the spine, or null if unreadable.
 2: 1 if you read the white sticker clearly, 0 if unsure.
-3: bounding box of that spine as [ymin,xmin,ymax,xmax] normalized 0–1000, tight to just that one spine, never spanning neighbors or shelves.
+3: shelf row index — 0 for the top shelf, 1 for the second shelf from top, 2 for the third, etc.
 CRITICAL for element 0: read the sticker character-by-character exactly as printed. The cutter letters come from the AUTHOR'S last name, NOT from the title. Never infer or guess the cutter from the title — e.g. "The New Organic Grower" by Coleman has sticker "635.04 COL", not "635.04 THE". If you cannot read it clearly, return null.
 If a sticker is partially cut off by the edge of the image or another book, DO NOT guess the missing letters or numbers. Return null.
 Never copy a neighbor's label.
 IMPORTANT for element 2: return 1 ONLY if you can read every character of the sticker with certainty. If ANY character is unclear, blurry, shadowed, or you are guessing even one letter, return 0. A wrong sticker causes incorrect shelving flags — when in doubt, return 0.
-Example: [["973.7 HAR","Lincoln",1,[420,10,980,85]],["KIN","The Stand",1,[420,90,980,170]]]
-Example of unreadable or cropped sticker: [null, "Harry Potter", 0, [420,190,980,270]]`;
+Example: [["973.7 HAR","Lincoln",1,0],["KIN","The Stand",1,0],["635.04 COL","New Organic Grower",1,1]]
+Example of unreadable or cropped sticker: [null, "Harry Potter", 0, 0]`;
       }
 
       return `This is a library FICTION shelf photo. There may be multiple shelves.
@@ -920,22 +896,21 @@ Each inner array has exactly 4 elements:
 0: full text on the white sticker at the bottom of the spine (e.g. "BLACK, Cara", "BLACK, Cara 5"), or null if unreadable.
 1: book title from the spine, or null if unreadable.
 2: 1 if you read the white sticker clearly, 0 if unsure.
-3: bounding box of that spine as [ymin,xmin,ymax,xmax] normalized 0–1000, tight to just that one spine, never spanning neighbors or shelves.
+3: shelf row index — 0 for the top shelf, 1 for the second shelf from top, 2 for the third, etc.
 Rules: the white bottom sticker is the primary sort key — read it first. Return null and 0 for element 2 if you cannot read the sticker. Never copy a neighbor's text.
 If a sticker is partially cut off by the edge of the image or another book, DO NOT guess the missing letters or numbers. Return null.
 IMPORTANT for element 2: return 1 ONLY if you can read every character of the sticker with certainty. If ANY character is unclear, blurry, shadowed, or you are guessing even one letter, return 0. A wrong sticker causes incorrect shelving flags — when in doubt, return 0.
-Example: [["BLACK, Cara","Murder in Clichy",1,[420,10,980,85]],["KING, Stephen","The Stand",1,[420,90,980,170]]]
-Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,270]]`;
+Example: [["BLACK, Cara","Murder in Clichy",1,0],["KING, Stephen","The Stand",1,0],["ADAMS, Douglas","Hitchhiker",1,1]]
+Example of unreadable or cropped sticker: [null, "The Stand", 0, 0]`;
     }
 
-    // Expand the 4-element wire format [spine_label, title, confidence, box].
+    // Expand the 4-element wire format [spine_label, title, confidence, shelf_row].
     function expandBook(arr) {
-      const box = Array.isArray(arr[3]) && arr[3].length === 4 ? arr[3] : null;
       return {
-        title:        arr[1] ?? null,
-        spine_label:  arr[0] ?? null,
-        confidence:   Number(arr[2]) === 1 ? 'high' : 'low',   // tolerate "1" as a string
-        bounding_box: box,
+        spine_label: arr[0] ?? null,
+        title:       arr[1] ?? null,
+        confidence:  Number(arr[2]) === 1 ? 'high' : 'low',   // tolerate "1" as a string
+        shelfRow:    Number.isInteger(arr[3]) ? arr[3] : (typeof arr[3] === 'number' ? Math.round(arr[3]) : 0),
       };
     }
 
@@ -999,6 +974,10 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
     // cancelled run doesn't pop a confusing "took too long" error.
     let analysisAbort     = null;
     let analysisCancelled = false;
+
+    // Encode starts as soon as the photo loads so the ~365ms CPU work overlaps
+    // with the time the volunteer spends reading the photo before tapping Analyze.
+    let pendingEncode = null;
 
     const LOADING_STAGES = [
       'Compressing image',
@@ -1155,16 +1134,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       }
       if (!Array.isArray(parsed)) throw new Error('unexpected model output format');
 
-      // Books touching the photo edge likely have a partially cropped sticker.
-      // Keep them — silently dropping them miscounts the shelf and can hide a real
-      // misorder — but tag them so the order check treats them as unverifiable
-      // (yellow). Top-edge crops are fine: the sticker sits at the BOTTOM of the spine.
-      return parsed.filter(Array.isArray).map(expandBook).map(b => {
-        if (!b.bounding_box) return b;
-        const [, xmin, ymax, xmax] = b.bounding_box;
-        const cropped = xmin <= 5 || xmax >= 995 || ymax >= 995;
-        return cropped ? { ...b, _edgeCropped: true } : b;
-      });
+      return parsed.filter(Array.isArray).map(expandBook);
     }
 
     // Map a raw error to a message a volunteer can act on.
@@ -1193,7 +1163,8 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       const tPrep0  = performance.now();
       let image;
       try {
-        image = await getResizedImageData();
+        image = await (pendingEncode ?? getResizedImageData());
+        pendingEncode = null;
       } catch (err) {
         if (analysisCancelled) return;
         hideLoading();
@@ -1227,6 +1198,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
           // client errors other than 429, or being offline.
           const retryable = !err.noRetry &&
                             !(err.status >= 400 && err.status < 500 && err.status !== 429) &&
+                            err.name !== 'AbortError' &&   // timeout at temp 0 → same result; don't double the wait
                             navigator.onLine;
           if (attempt === maxAttempts || !retryable) {
             hideLoading();
@@ -1420,8 +1392,6 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
     // String keys carry surname (val), first name (first), and series volume (vol).
     // Comparison is surname → first name → volume (and a title fallback).
     function sortKey(book, section) {
-      // Spine cut off by the photo edge — the sticker read can't be trusted.
-      if (book._edgeCropped) return null;
       // Model flagged this label as uncertain (confidence 0). A shaky guess can
       // cascade into false red flags for neighboring books, so treat it as
       // unreadable — render yellow ("check by hand") rather than risk a false alarm.
@@ -1537,108 +1507,18 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       return set;
     }
 
-    // Group books into shelf rows by Y-coordinate clustering.
-    // Within each shelf, books are sorted left-to-right by X-center.
-    // Returns { shelves: [[book, ...], ...], ungrouped: [book, ...] }.
-    function groupByShelf(books) {
-      const ungrouped = [];
-      const boxed    = [];
+    // Group books into shelf rows using the shelfRow field Gemini returns per spine.
+    // Books within each row stay in Gemini's left-to-right reading order (proven reliable).
+    function groupByShelfRow(books) {
+      const byRow = new Map();
       for (const b of books) {
-        if (!b.bounding_box || b.bounding_box.length !== 4) ungrouped.push(b);
-        else boxed.push(b);
+        const row = (typeof b.shelfRow === 'number' && b.shelfRow >= 0) ? b.shelfRow : 0;
+        if (!byRow.has(row)) byRow.set(row, []);
+        byRow.get(row).push(b);
       }
-      if (boxed.length === 0) return { shelves: [], ungrouped };
-
-      // Compute Y-center and height per book
-      const enriched = boxed.map(b => {
-        const [ymin, , ymax] = b.bounding_box;
-        return { book: b, yc: (ymin + ymax) / 2, h: Math.max(1, ymax - ymin) };
-      });
-
-      // Sort by Y-center
-      enriched.sort((a, b) => a.yc - b.yc);
-
-      // Median spine height — threshold for starting a new shelf
-      const heights = [...enriched.map(e => e.h)].sort((a, b) => a - b);
-      const medianH = heights[Math.floor(heights.length / 2)] || 100;
-      const gapThreshold = medianH * 0.6;
-
-      // Walk and split into shelves
-      const shelves = [[enriched[0]]];
-      for (let i = 1; i < enriched.length; i++) {
-        const gap = enriched[i].yc - enriched[i - 1].yc;
-        if (gap > gapThreshold) shelves.push([]);
-        shelves[shelves.length - 1].push(enriched[i]);
-      }
-
-      // Within each shelf, sort by X-center (left to right)
-      const result = shelves.map(shelf => {
-        shelf.sort((a, b) => {
-          const ax = (a.book.bounding_box[1] + a.book.bounding_box[3]) / 2;
-          const bx = (b.book.bounding_box[1] + b.book.bounding_box[3]) / 2;
-          return ax - bx;
-        });
-        return shelf.map(e => e.book);
-      });
-
-      return { shelves: result, ungrouped };
-    }
-
-    // Clip box heights so they don't bleed across shelves.
-    // For each shelf, compute median ymin/ymax; clamp outliers to that band.
-    function clipShelfBoxes(shelfBooks) {
-      if (shelfBooks.length < 2) return shelfBooks;
-      const ymins = shelfBooks.map(b => b.bounding_box[0]).sort((a, b) => a - b);
-      const ymaxs = shelfBooks.map(b => b.bounding_box[2]).sort((a, b) => a - b);
-      const medYmin = ymins[Math.floor(ymins.length / 2)];
-      const medYmax = ymaxs[Math.floor(ymaxs.length / 2)];
-      const heights = shelfBooks.map(b => b.bounding_box[2] - b.bounding_box[0]).sort((a, b) => a - b);
-      const medH = heights[Math.floor(heights.length / 2)];
-      const tol = medH * 0.25;
-
-      return shelfBooks.map(b => {
-        const [ymin, xmin, ymax, xmax] = b.bounding_box;
-        const clampedYmin = ymin < medYmin - tol ? medYmin : ymin;
-        const clampedYmax = ymax > medYmax + tol ? medYmax : ymax;
-        return { ...b, bounding_box: [clampedYmin, xmin, clampedYmax, xmax] };
-      });
-    }
-
-    // Sanitize bounding boxes within a shelf: clamp oversized widths and resolve overlaps.
-    // Books must already be sorted left-to-right by X-center.
-    function sanitizeShelfBoxes(shelfBooks) {
-      if (shelfBooks.length < 2) return shelfBooks;
-
-      // Median width — used to cap outliers
-      const widths = shelfBooks.map(b => b.bounding_box[3] - b.bounding_box[1]).sort((a, b) => a - b);
-      const medW = widths[Math.floor(widths.length / 2)];
-      const maxW = medW * 1.8;  // no box wider than 1.8× median
-
-      const fixed = shelfBooks.map(b => {
-        let [ymin, xmin, ymax, xmax] = b.bounding_box;
-        const w = xmax - xmin;
-        if (w > maxW) {
-          // Shrink toward center
-          const cx = (xmin + xmax) / 2;
-          xmin = cx - maxW / 2;
-          xmax = cx + maxW / 2;
-        }
-        return { ...b, bounding_box: [ymin, xmin, ymax, xmax] };
-      });
-
-      // Resolve horizontal overlaps: push adjacent boxes apart so arrows don't stack
-      for (let i = 0; i < fixed.length - 1; i++) {
-        const bbA = fixed[i].bounding_box;
-        const bbB = fixed[i + 1].bounding_box;
-        if (bbA[3] > bbB[1]) {
-          // Overlap detected — split at midpoint
-          const mid = (bbA[3] + bbB[1]) / 2;
-          fixed[i]     = { ...fixed[i],     bounding_box: [bbA[0], bbA[1], bbA[2], mid] };
-          fixed[i + 1] = { ...fixed[i + 1], bounding_box: [bbB[0], mid,    bbB[2], bbB[3]] };
-        }
-      }
-
-      return fixed;
+      return [...byRow.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, shelf]) => shelf);
     }
 
     // Levenshtein edit distance between two strings (small inputs — simple DP).
@@ -1828,67 +1708,14 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       return checked;
     }
 
-    // Public entry: group by shelf, clip boxes per shelf, run order check per shelf,
-    // and flatten back to a single array (preserving each book's display position).
+    // Group by shelf row, run order check per shelf, flatten back to one array.
     function checkOrder(books, section) {
-      const { shelves, ungrouped } = groupByShelf(books);
-      const checkedShelves = shelves.flatMap((shelf, si) => {
-        const clipped   = clipShelfBoxes(shelf);
-        const sanitized = sanitizeShelfBoxes(clipped);
-        // Tag each book with its shelf index so we can match shelf-mates later
-        return checkOrderOneShelf(sanitized, section).map(b => ({ ...b, shelfIndex: si }));
-      });
-      // Ungrouped books (no bounding box) — pass through as unverifiable, no shelf info
-      const checkedUngrouped = ungrouped.map(b => ({
-        ...b, outOfOrder: false, unverifiable: true, idealPosition: null,
-        shelfPosition: null, shelfSize: null, shelfIndex: -1, tiedGroupSlots: null,
-      }));
-      return [...checkedShelves, ...checkedUngrouped];
+      const shelves = groupByShelfRow(books);
+      return shelves.flatMap((shelf, si) =>
+        checkOrderOneShelf(shelf, section).map(b => ({ ...b, shelfIndex: si }))
+      );
     }
 
-    // Map a normalized (0-1000) bounding box to a pixel rect over photoArea,
-    // accounting for the snapshot's object-fit:contain letterboxing.
-    function bbToRect(bb) {
-      const cw = snapshot.width, ch = snapshot.height;
-      const rect   = snapshot.getBoundingClientRect();
-      const paRect = photoArea.getBoundingClientRect();
-      const s = Math.min(rect.width / cw, rect.height / ch);
-      const offX = (rect.width  - cw * s) / 2 + (rect.left - paRect.left);
-      const offY = (rect.height - ch * s) / 2 + (rect.top  - paRect.top);
-      const [ymin, xmin, ymax, xmax] = bb;
-      return {
-        left:   offX + (xmin / 1000) * cw * s,
-        top:    offY + (ymin / 1000) * ch * s,
-        width:  ((xmax - xmin) / 1000) * cw * s,
-        height: ((ymax - ymin) / 1000) * ch * s,
-      };
-    }
-
-    // Thin stripe at the TOP of each flagged spine — sits on the spine body,
-    // not at the white label at the foot. Red = out of order, yellow = unreadable.
-    function renderBoxes() {
-      document.getElementById('bookBoxes')?.remove();
-      const flagged = lastCheckedBooks.filter(b => b.bounding_box && (b.outOfOrder || b.unverifiable));
-      if (flagged.length === 0) return;
-
-      const wrap = document.createElement('div');
-      wrap.id = 'bookBoxes';
-      wrap.className = 'book-boxes';
-      photoArea.appendChild(wrap);
-
-      for (const b of flagged) {
-        const r = bbToRect(b.bounding_box);
-        const markH = Math.max(8, Math.min(r.height * 0.12, 16));
-        const mark = document.createElement('div');
-        mark.className = 'label-mark ' + (b.outOfOrder ? 'label-mark-bad' : 'label-mark-unv');
-        mark.dataset.bookIdx = lastCheckedBooks.indexOf(b);
-        mark.style.left   = `${r.left}px`;
-        mark.style.top    = `${r.top}px`;
-        mark.style.width  = `${r.width}px`;
-        mark.style.height = `${markH}px`;
-        wrap.appendChild(mark);
-      }
-    }
 
     // ── Results: draw boxes + a summary badge ───────────────
     let lastCheckedBooks = [];
@@ -1934,8 +1761,6 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
         return;
       }
 
-      enableInspect();
-      renderBoxes();
       showSummaryBadge(total, outCount, unvCount);
       showFlaggedList(checked);
 
@@ -1992,62 +1817,12 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       photoArea.appendChild(overlay);
     }
 
-    // Reposition boxes if the viewport changes (rotation, etc).
-    window.addEventListener('resize', () => {
-      if (document.getElementById('bookBoxes')) renderBoxes();
-    });
-
-    // ── Tap-to-inspect: show OCR readout for the tapped book ──
-    function enableInspect() {
-      snapshot.style.pointerEvents = 'auto';
-      snapshot.style.cursor = 'pointer';
-      snapshot.addEventListener('click', inspectHandler);
-    }
-
-    function disableInspect() {
-      snapshot.style.pointerEvents = '';
-      snapshot.style.cursor = '';
-      snapshot.removeEventListener('click', inspectHandler);
-      document.getElementById('bookInspect')?.remove();
-    }
-
-    function inspectHandler(e) {
-      // Translate click to canvas-internal coordinates (object-fit: contain)
-      const rect = snapshot.getBoundingClientRect();
-      const cw = snapshot.width, ch = snapshot.height;
-      const dispScale = Math.min(rect.width / cw, rect.height / ch);
-      const dispW = cw * dispScale, dispH = ch * dispScale;
-      const offX = (rect.width  - dispW) / 2;
-      const offY = (rect.height - dispH) / 2;
-      const px = (e.clientX - rect.left - offX) / dispScale;
-      const py = (e.clientY - rect.top  - offY) / dispScale;
-
-      // Hit-test against book boxes (prefer smallest box if multiple contain the point)
-      let best = null, bestArea = Infinity;
-      for (const b of lastCheckedBooks) {
-        if (!b.bounding_box) continue;
-        const [ymin, xmin, ymax, xmax] = b.bounding_box;
-        const x = (xmin / 1000) * cw;
-        const y = (ymin / 1000) * ch;
-        const w = ((xmax - xmin) / 1000) * cw;
-        const h = ((ymax - ymin) / 1000) * ch;
-        if (px >= x && px <= x + w && py >= y && py <= y + h) {
-          const area = w * h;
-          if (area < bestArea) { best = b; bestArea = area; }
-        }
-      }
-
-      document.getElementById('bookInspect')?.remove();
-      if (!best) return;
-      showInspectCard(best);
-    }
 
     function showInspectCard(book) {
       document.getElementById('bookInspect')?.remove();
-      const status = book._edgeCropped ? '⚠ Cut off at the photo edge — check it by hand, or retake with the whole spine in frame.'
-                   : book.unverifiable ? "⚠ Couldn't read this spine clearly — check it by hand."
-                   : book.outOfOrder    ? '⚠ Out of order — this book is in the wrong spot.'
-                   :                       '✓ In order';
+      const status = book.unverifiable ? "⚠ Couldn't read this spine clearly — check it by hand."
+                   : book.outOfOrder   ? '⚠ Out of order — this book is in the wrong spot.'
+                   :                     '✓ In order';
       const card = document.createElement('div');
       card.id = 'bookInspect';
       card.className = 'book-inspect';
@@ -2100,26 +1875,14 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
           <div class="flagged-item-status ${isBad ? 'flagged-item-status-bad' : 'flagged-item-status-unv'}">${isBad ? 'Out of order' : 'Check'}</div>`;
         row.addEventListener('click', () => {
           showInspectCard(book);
-          pulseMark(lastCheckedBooks.indexOf(book));
         });
         panel.appendChild(row);
       }
       panel.classList.add('show');
     }
 
-    // Flash the photo highlight that belongs to a flagged-list row, so the
-    // volunteer can see exactly which spine the row is talking about.
-    function pulseMark(bookIdx) {
-      const mark = document.querySelector(`.label-mark[data-book-idx="${bookIdx}"]`);
-      if (!mark) return;
-      mark.classList.remove('pulse');
-      void mark.offsetWidth;   // restart the animation if it's already running
-      mark.classList.add('pulse');
-    }
-
     function newScan() {
       document.getElementById('resultsOverlay')?.remove();
-      document.getElementById('bookBoxes')?.remove();
       document.getElementById('debugOverlay')?.remove();
       document.getElementById('bookInspect')?.remove();
       document.getElementById('sectionHint')?.remove();
@@ -2128,7 +1891,6 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       panel.innerHTML = '';
       lastRawBooks = null;
       lastCheckedBooks = [];
-      disableInspect();
       retake();
     }
 
@@ -2272,7 +2034,7 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
               spine_label: b.spine_label,
               title: b.title,
               confidence: b.confidence,
-              bounding_box: b.bounding_box,
+              shelfRow: b.shelfRow,
             })), null, 2);
             navigator.clipboard.writeText(json).then(() => {
               const btn = document.getElementById('debugCopyJson');
@@ -2443,9 +2205,9 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       // ── checkOrder with simple shelf ──
       console.group('checkOrder (simple)');
       const simpleBooks = [
-        { position: 1, author_last: 'Adams',  spine_label: 'ADAMS',  title: 'A', confidence: 'high', bounding_box: [100, 0, 900, 100] },
-        { position: 2, author_last: 'Black',  spine_label: 'BLACK',  title: 'B', confidence: 'high', bounding_box: [100, 100, 900, 200] },
-        { position: 3, author_last: 'Clark',  spine_label: 'CLARK',  title: 'C', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { position: 1, author_last: 'Adams',  spine_label: 'ADAMS',  title: 'A', confidence: 'high', shelfRow: 0 },
+        { position: 2, author_last: 'Black',  spine_label: 'BLACK',  title: 'B', confidence: 'high', shelfRow: 0 },
+        { position: 3, author_last: 'Clark',  spine_label: 'CLARK',  title: 'C', confidence: 'high', shelfRow: 0 },
       ];
       const simpleResult = checkOrder(simpleBooks, 'fiction');
       assert(simpleResult.every(b => !b.outOfOrder), 'All in order — no flags');
@@ -2455,9 +2217,9 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       // ── checkOrder with misplaced book ──
       console.group('checkOrder (misplaced)');
       const misplacedBooks = [
-        { position: 1, author_last: 'Adams',  spine_label: 'ADAMS',  title: 'A', confidence: 'high', bounding_box: [100, 0, 900, 100] },
-        { position: 2, author_last: 'Clark',  spine_label: 'CLARK',  title: 'C', confidence: 'high', bounding_box: [100, 100, 900, 200] },
-        { position: 3, author_last: 'Black',  spine_label: 'BLACK',  title: 'B', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { position: 1, author_last: 'Adams',  spine_label: 'ADAMS',  title: 'A', confidence: 'high', shelfRow: 0 },
+        { position: 2, author_last: 'Clark',  spine_label: 'CLARK',  title: 'C', confidence: 'high', shelfRow: 0 },
+        { position: 3, author_last: 'Black',  spine_label: 'BLACK',  title: 'B', confidence: 'high', shelfRow: 0 },
       ];
       const misResult = checkOrder(misplacedBooks, 'fiction');
       assert(misResult[0].outOfOrder === false, 'Adams in order');
@@ -2468,9 +2230,9 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       // ── checkOrder with unverifiable book ──
       console.group('checkOrder (unverifiable)');
       const unvBooks = [
-        { position: 1, author_last: 'Adams',  spine_label: 'ADAMS',  title: 'A', confidence: 'high', bounding_box: [100, 0, 900, 100] },
-        { position: 2, author_last: null,      spine_label: null,     title: null, confidence: 'low', bounding_box: [100, 100, 900, 200] },
-        { position: 3, author_last: 'Clark',  spine_label: 'CLARK',  title: 'C', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { position: 1, author_last: 'Adams',  spine_label: 'ADAMS',  title: 'A', confidence: 'high', shelfRow: 0 },
+        { position: 2, author_last: null,      spine_label: null,     title: null, confidence: 'low',  shelfRow: 0 },
+        { position: 3, author_last: 'Clark',  spine_label: 'CLARK',  title: 'C', confidence: 'high', shelfRow: 0 },
       ];
       const unvResult = checkOrder(unvBooks, 'fiction');
       assert(unvResult[1].unverifiable === true, 'Low confidence + no label → unverifiable');
@@ -2480,9 +2242,9 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       // ── checkOrder sandwich rule ──
       console.group('checkOrder (sandwich rule)');
       const sandwichBooks = [
-        { position: 1, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'A', confidence: 'high', bounding_box: [100, 0, 900, 100] },
-        { position: 2, author_last: 'Zulu',  spine_label: 'ZULU',        title: 'Z', confidence: 'high', bounding_box: [100, 100, 900, 200] },
-        { position: 3, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'B', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { position: 1, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'A', confidence: 'high', shelfRow: 0 },
+        { position: 2, author_last: 'Zulu',  spine_label: 'ZULU',        title: 'Z', confidence: 'high', shelfRow: 0 },
+        { position: 3, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'B', confidence: 'high', shelfRow: 0 },
       ];
       const sandwichResult = checkOrder(sandwichBooks, 'fiction');
       assert(sandwichResult[1].unverifiable === true,
@@ -2492,42 +2254,41 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       console.groupEnd();
 
       // ── Multi-shelf grouping ──
-      console.group('groupByShelf');
+      console.group('groupByShelfRow');
       const multiShelfBooks = [
-        { position: 1, bounding_box: [100, 0, 400, 100] },   // shelf 1
-        { position: 2, bounding_box: [100, 100, 400, 200] },  // shelf 1
-        { position: 3, bounding_box: [600, 0, 900, 100] },    // shelf 2
-        { position: 4, bounding_box: [600, 100, 900, 200] },  // shelf 2
+        { position: 1, shelfRow: 0 },
+        { position: 2, shelfRow: 0 },
+        { position: 3, shelfRow: 1 },
+        { position: 4, shelfRow: 1 },
       ];
-      const grouped = groupByShelf(multiShelfBooks);
-      eq(grouped.shelves.length, 2, 'Two shelves detected');
-      eq(grouped.shelves[0].length, 2, 'Shelf 1 has 2 books');
-      eq(grouped.shelves[1].length, 2, 'Shelf 2 has 2 books');
-      eq(grouped.ungrouped.length, 0, 'No ungrouped books');
+      const grouped = groupByShelfRow(multiShelfBooks);
+      eq(grouped.length, 2, 'Two shelves detected');
+      eq(grouped[0].length, 2, 'Shelf 1 has 2 books');
+      eq(grouped[1].length, 2, 'Shelf 2 has 2 books');
       console.groupEnd();
 
       // ── Tied books ──
       console.group('checkOrder (tied keys)');
       const tiedBooks = [
-        { position: 1, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'A', confidence: 'high', bounding_box: [100, 0, 900, 100] },
-        { position: 2, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'B', confidence: 'high', bounding_box: [100, 100, 900, 200] },
-        { position: 3, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'C', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { position: 1, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'A', confidence: 'high', shelfRow: 0 },
+        { position: 2, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'B', confidence: 'high', shelfRow: 0 },
+        { position: 3, author_last: 'Black', spine_label: 'BLACK, Cara', title: 'C', confidence: 'high', shelfRow: 0 },
       ];
       const tiedResult = checkOrder(tiedBooks, 'fiction');
       assert(tiedResult.every(b => !b.outOfOrder), 'Tied books — none flagged out of order');
       console.groupEnd();
 
-      // ── Edge-cropped books ──
-      console.group('checkOrder (edge-cropped)');
+      // ── Partially-visible sticker (confidence low) ──
+      console.group('checkOrder (low-conf sticker at edge)');
       const edgeBooks = [
-        { position: 1, spine_label: 'ADAMS', title: 'A', confidence: 'high', bounding_box: [100, 50, 900, 150] },
-        { position: 2, spine_label: 'ZULU',  title: 'Z', confidence: 'high', bounding_box: [100, 150, 900, 250], _edgeCropped: true },
-        { position: 3, spine_label: 'CLARK', title: 'C', confidence: 'high', bounding_box: [100, 250, 900, 350] },
+        { position: 1, spine_label: 'ADAMS', title: 'A', confidence: 'high', shelfRow: 0 },
+        { position: 2, spine_label: 'ZULU',  title: 'Z', confidence: 'low',  shelfRow: 0 },
+        { position: 3, spine_label: 'CLARK', title: 'C', confidence: 'high', shelfRow: 0 },
       ];
       const edgeResult = checkOrder(edgeBooks, 'fiction');
-      assert(edgeResult[1].unverifiable === true, 'Edge-cropped book → unverifiable, not flagged');
-      assert(edgeResult[1].outOfOrder === false, 'Edge-cropped book never marked out of order');
-      assert(edgeResult.length === 3, 'Edge-cropped book still counted (not dropped)');
+      assert(edgeResult[1].unverifiable === true, 'Low-conf sticker → unverifiable, not flagged');
+      assert(edgeResult[1].outOfOrder === false, 'Low-conf sticker never marked out of order');
+      assert(edgeResult.length === 3, 'Low-conf book still counted (not dropped)');
       console.groupEnd();
 
       // ── Same Dewey cutter is now ordered by title ──
@@ -2535,30 +2296,30 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       // GAR run in correct title order (garden friends < garden wisdom < ground
       // rules < vegetable…) → nothing flagged.
       const dupDeweyOrdered = [
-        { spine_label: '635 GAL', title: 'Striking Succulent Garden',     confidence: 'high', bounding_box: [100, 0,   900, 100] },
-        { spine_label: '635 GAR', title: 'Garden Friends',               confidence: 'high', bounding_box: [100, 100, 900, 200] },
-        { spine_label: '635 GAR', title: 'Garden Wisdom & Know-How',     confidence: 'high', bounding_box: [100, 200, 900, 300] },
-        { spine_label: '635 GAR', title: 'Ground Rules',                  confidence: 'high', bounding_box: [100, 300, 900, 400] },
-        { spine_label: '635 GAR', title: 'Vegetable Gardening Made Easy', confidence: 'high', bounding_box: [100, 400, 900, 500] },
-        { spine_label: '635 GET', title: 'The Heirloom Life Gardener',   confidence: 'high', bounding_box: [100, 500, 900, 600] },
+        { spine_label: '635 GAL', title: 'Striking Succulent Garden',     confidence: 'high', shelfRow: 0 },
+        { spine_label: '635 GAR', title: 'Garden Friends',               confidence: 'high', shelfRow: 0 },
+        { spine_label: '635 GAR', title: 'Garden Wisdom & Know-How',     confidence: 'high', shelfRow: 0 },
+        { spine_label: '635 GAR', title: 'Ground Rules',                  confidence: 'high', shelfRow: 0 },
+        { spine_label: '635 GAR', title: 'Vegetable Gardening Made Easy', confidence: 'high', shelfRow: 0 },
+        { spine_label: '635 GET', title: 'The Heirloom Life Gardener',   confidence: 'high', shelfRow: 0 },
       ];
       assert(checkOrder(dupDeweyOrdered, 'nonfiction').every(b => !b.outOfOrder),
         'GAL ≤ GAR ×4 in title order ≤ GET → nothing flagged');
 
       // Same cutter, one book out of title order → flagged.
       const dupDeweyMisordered = [
-        { spine_label: '635 GAR', title: 'Vegetable Gardening Made Easy', confidence: 'high', bounding_box: [100, 0,   900, 100] },
-        { spine_label: '635 GAR', title: 'Garden Friends',               confidence: 'high', bounding_box: [100, 100, 900, 200] },
-        { spine_label: '635 GAR', title: 'Ground Rules',                  confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { spine_label: '635 GAR', title: 'Vegetable Gardening Made Easy', confidence: 'high', shelfRow: 0 },
+        { spine_label: '635 GAR', title: 'Garden Friends',               confidence: 'high', shelfRow: 0 },
+        { spine_label: '635 GAR', title: 'Ground Rules',                  confidence: 'high', shelfRow: 0 },
       ];
       assert(checkOrder(dupDeweyMisordered, 'nonfiction').some(b => b.outOfOrder),
         'GAR run out of title order → at least one flagged');
 
       // A missing title inside the run can't be placed → no title-order flag.
       const dupDeweyNullTitle = [
-        { spine_label: '635 GAR', title: 'Apple',  confidence: 'high', bounding_box: [100, 0,   900, 100] },
-        { spine_label: '635 GAR', title: null,     confidence: 'high', bounding_box: [100, 100, 900, 200] },
-        { spine_label: '635 GAR', title: 'Banana', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { spine_label: '635 GAR', title: 'Apple',  confidence: 'high', shelfRow: 0 },
+        { spine_label: '635 GAR', title: null,     confidence: 'high', shelfRow: 0 },
+        { spine_label: '635 GAR', title: 'Banana', confidence: 'high', shelfRow: 0 },
       ];
       assert(checkOrder(dupDeweyNullTitle, 'nonfiction').every(b => !b.outOfOrder),
         'GAR run with an unknown title → no title-order flag');
@@ -2567,27 +2328,27 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       // ── Letter-only Dewey labels (biography section) are actually checked ──
       console.group('checkOrder (letter-only Dewey)');
       const bioOk = [
-        { spine_label: 'B ADAMS',     title: 'A', confidence: 'high', bounding_box: [100, 0,   900, 100] },
-        { spine_label: 'B CHURCHILL', title: 'C', confidence: 'high', bounding_box: [100, 100, 900, 200] },
-        { spine_label: 'B LINCOLN',   title: 'L', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { spine_label: 'B ADAMS',     title: 'A', confidence: 'high', shelfRow: 0 },
+        { spine_label: 'B CHURCHILL', title: 'C', confidence: 'high', shelfRow: 0 },
+        { spine_label: 'B LINCOLN',   title: 'L', confidence: 'high', shelfRow: 0 },
       ];
       assert(checkOrder(bioOk, 'nonfiction').every(b => !b.outOfOrder),
         'In-order biography shelf (ADAMS<CHURCHILL<LINCOLN) → nothing flagged');
 
       const bioBad = [
-        { spine_label: 'B ADAMS',     title: 'A', confidence: 'high', bounding_box: [100, 0,   900, 100] },
-        { spine_label: 'B WILSON',    title: 'W', confidence: 'high', bounding_box: [100, 100, 900, 200] },
-        { spine_label: 'B CHURCHILL', title: 'C', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { spine_label: 'B ADAMS',     title: 'A', confidence: 'high', shelfRow: 0 },
+        { spine_label: 'B WILSON',    title: 'W', confidence: 'high', shelfRow: 0 },
+        { spine_label: 'B CHURCHILL', title: 'C', confidence: 'high', shelfRow: 0 },
       ];
       assert(checkOrder(bioBad, 'nonfiction').some(b => b.outOfOrder),
         'Out-of-order biography (WILSON before CHURCHILL) → flagged (was a silent miss before)');
 
       // Numbered run followed by a biography section must NOT false-flag the B's.
       const mixedNF = [
-        { spine_label: '973.7 HAR', title: 'H', confidence: 'high', bounding_box: [100, 0,   900, 100] },
-        { spine_label: '973.8 KIN', title: 'K', confidence: 'high', bounding_box: [100, 100, 900, 200] },
-        { spine_label: 'B ADAMS',   title: 'A', confidence: 'high', bounding_box: [100, 200, 900, 300] },
-        { spine_label: 'B LINCOLN', title: 'L', confidence: 'high', bounding_box: [100, 300, 900, 400] },
+        { spine_label: '973.7 HAR', title: 'H', confidence: 'high', shelfRow: 0 },
+        { spine_label: '973.8 KIN', title: 'K', confidence: 'high', shelfRow: 0 },
+        { spine_label: 'B ADAMS',   title: 'A', confidence: 'high', shelfRow: 0 },
+        { spine_label: 'B LINCOLN', title: 'L', confidence: 'high', shelfRow: 0 },
       ];
       assert(checkOrder(mixedNF, 'nonfiction').every(b => !b.outOfOrder),
         'Numbered Dewey run then biography section → nothing flagged');
@@ -2596,9 +2357,9 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       // ── Low-confidence label: fiction ──
       console.group('checkOrder (low-confidence fiction)');
       const lowConfFicBooks = [
-        { spine_label: 'ADAMS', title: 'A', confidence: 'high', bounding_box: [100, 0,   900, 100] },
-        { spine_label: 'ZULU',  title: 'Z', confidence: 'low',  bounding_box: [100, 100, 900, 200] },
-        { spine_label: 'CLARK', title: 'C', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { spine_label: 'ADAMS', title: 'A', confidence: 'high', shelfRow: 0 },
+        { spine_label: 'ZULU',  title: 'Z', confidence: 'low',  shelfRow: 0 },
+        { spine_label: 'CLARK', title: 'C', confidence: 'high', shelfRow: 0 },
       ];
       const lowConfFicResult = checkOrder(lowConfFicBooks, 'fiction');
       assert(lowConfFicResult[1].unverifiable === true,  'Low-conf fiction label → yellow, not red');
@@ -2610,9 +2371,9 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       // ── Low-confidence label: nonfiction ──
       console.group('checkOrder (low-confidence nonfiction)');
       const lowConfNFBooks = [
-        { spine_label: '635 FAR', title: 'A', confidence: 'high', bounding_box: [100, 0,   900, 100] },
-        { spine_label: '635 FRA', title: 'B', confidence: 'low',  bounding_box: [100, 100, 900, 200] },
-        { spine_label: '635 GET', title: 'C', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { spine_label: '635 FAR', title: 'A', confidence: 'high', shelfRow: 0 },
+        { spine_label: '635 FRA', title: 'B', confidence: 'low',  shelfRow: 0 },
+        { spine_label: '635 GET', title: 'C', confidence: 'high', shelfRow: 0 },
       ];
       const lowConfNFResult = checkOrder(lowConfNFBooks, 'nonfiction');
       assert(lowConfNFResult[1].unverifiable === true,  'Low-conf Dewey label → yellow, not red');
@@ -2658,15 +2419,15 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
           </div>
           <div class="first-hint-row">
             <span class="first-hint-dot" style="background:#ef4444"></span>
-            <span><b>Red box</b> = out of order — move this book.</span>
+            <span><b>Red</b> in the list below = out of order — move this book.</span>
           </div>
           <div class="first-hint-row">
             <span class="first-hint-dot" style="background:#facc15"></span>
-            <span><b>Yellow box</b> = couldn't read the spine clearly — check it by eye.</span>
+            <span><b>Yellow</b> in the list = couldn't read the spine clearly — check it by eye.</span>
           </div>
           <div class="first-hint-row">
             <span class="first-hint-dot" style="background:#4ade80"></span>
-            <span><b>No box</b> = in order. Tap any book to see what was read.</span>
+            <span><b>No flag</b> = in order. Tap any flagged book in the list to see what was read.</span>
           </div>
           <div class="first-hint-row" style="margin-top:4px;padding-top:10px;border-top:1px solid #2c2c2c">
             <span style="font-size:15px;flex-shrink:0;margin-top:-1px">⚠️</span>

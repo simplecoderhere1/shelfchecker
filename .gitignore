@@ -3,7 +3,11 @@ server/
 
 # local dev / testing — not part of the deployed app
 testitems/
+test_items/
 testitems.zip
 plan.md
 .claude/
 __pycache__/
+node_modules/
+package.json
+package-lock.json
