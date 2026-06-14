@@ -1012,14 +1012,27 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       return '<span class="anim-dots"><span>.</span><span>.</span><span>.</span></span>';
     }
 
+    const STAGE_ICON = { done: '✓', pending: '○' };
+
+    // Single source of truth for one stage row's class + icon. state is
+    // 'done' | 'active' | 'pending'. No-op if the row isn't on screen, so the
+    // callers below don't each need to bounds-check _currentStage.
+    function _setStageState(i, state) {
+      const row  = document.getElementById(`stage-row-${i}`);
+      const icon = document.getElementById(`stage-icon-${i}`);
+      if (!row || !icon) return;
+      row.classList.toggle('s-done',   state === 'done');
+      row.classList.toggle('s-active', state === 'active');
+      icon.innerHTML = state === 'active' ? _dotsHtml() : STAGE_ICON[state];
+    }
+
     function showLoading() {
-      _currentStage = 0;
       const overlay = document.createElement('div');
       overlay.id        = 'loadingOverlay';
       overlay.className = 'loading-overlay';
       const rows = LOADING_STAGES.map((label, i) => `
-        <div class="stage-row${i === 0 ? ' s-active' : ''}" id="stage-row-${i}">
-          <span class="stage-icon" id="stage-icon-${i}">${i === 0 ? _dotsHtml() : '○'}</span>
+        <div class="stage-row" id="stage-row-${i}">
+          <span class="stage-icon" id="stage-icon-${i}">${STAGE_ICON.pending}</span>
           <span class="stage-label">${label}</span>
         </div>`).join('');
       overlay.innerHTML = `
@@ -1027,33 +1040,17 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
         <button class="loading-cancel" id="loadingCancel" style="margin-top:8px">Cancel</button>`;
       photoArea.appendChild(overlay);
       document.getElementById('loadingCancel').onclick = cancelAnalysis;
+      resetStageTo(0);
     }
 
     function advanceStage() {
-      const cur = document.getElementById(`stage-row-${_currentStage}`);
-      if (cur) {
-        cur.classList.remove('s-active');
-        cur.classList.add('s-done');
-        document.getElementById(`stage-icon-${_currentStage}`).innerHTML = '✓';
-      }
-      _currentStage++;
-      const next = document.getElementById(`stage-row-${_currentStage}`);
-      if (next) {
-        next.classList.add('s-active');
-        document.getElementById(`stage-icon-${_currentStage}`).innerHTML = _dotsHtml();
-      }
+      _setStageState(_currentStage, 'done');
+      _setStageState(++_currentStage, 'active');
     }
 
     function resetStageTo(idx) {
-      LOADING_STAGES.forEach((_, i) => {
-        const row  = document.getElementById(`stage-row-${i}`);
-        const icon = document.getElementById(`stage-icon-${i}`);
-        if (!row || !icon) return;
-        row.classList.remove('s-active', 's-done');
-        if (i < idx)       { row.classList.add('s-done');   icon.innerHTML = '✓'; }
-        else if (i === idx) { row.classList.add('s-active'); icon.innerHTML = _dotsHtml(); }
-        else                { icon.innerHTML = '○'; }
-      });
+      LOADING_STAGES.forEach((_, i) =>
+        _setStageState(i, i < idx ? 'done' : i === idx ? 'active' : 'pending'));
       _currentStage = idx;
     }
 
@@ -1467,15 +1464,14 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
     //   2. primary value (surname / Dewey number+cutter)
     //   3. first name (within same surname: Benjamin < Cara)
     //   4. series volume number (within same author: Leduc 5 < Leduc 6; nulls sort last)
-    //   5. title (fiction ONLY — see note below)
+    //   5. title (both sections — books matching all of the above shelve by title)
     //
-    // IMPORTANT: title is a tiebreaker for FICTION only. There the label is a full
-    // author name ("BLACK, Cara"), so two books with the same label are genuinely
-    // the same author, shelved by title. For a Dewey cutter ("635 GAR") the three
-    // letters come from the author surname and are shared by MANY different authors
-    // (Garcia, Gardner, Garden…), so two "635 GAR" books CANNOT be ordered from the
-    // sticker alone — they must be treated as tied. Using title there produced false
-    // "out of order" flags on correctly-shelved same-call-number books.
+    // NOTE on Dewey + title: a cutter like "635 GAR" comes from the author surname
+    // and can be shared by different authors (Garcia, Gardner…), so ordering two
+    // "635 GAR" books by title is only correct when the stickers really are
+    // identical. We accept that (it matches library filing) but guard the
+    // false-positive case in step 5: if either title is missing we can't place the
+    // book, so the pair is treated as tied rather than forced into an order.
     function compareKeys(a, b) {
       if (a.kind !== b.kind) return a.kind === 'dewey' ? -1 : 1;
 
@@ -1508,10 +1504,15 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       const bv = b.vol == null ? Infinity : b.vol;
       if (av !== bv) return av - bv;
 
-      // 5. Title — fiction only. Dewey same-cutter books are tied (return 0).
-      if (a.kind !== 'str') return 0;
+      // 5. Title — final tiebreaker for BOTH author and Dewey keys. Books that
+      // match on everything above (same author, or same Dewey number+cutter) are
+      // shelved alphabetically by title. Only order by title when both titles were
+      // actually read: a missing title can't be placed, so treat the pair as tied
+      // rather than forcing an order (this is what prevents false "out of order"
+      // flags on same-call-number books we couldn't fully read).
       const at = a.title || '';
       const bt = b.title || '';
+      if (!at || !bt) return 0;
       return at.localeCompare(bt, undefined, { sensitivity: 'base' });
     }
 
@@ -2430,10 +2431,13 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
                           { kind: 'str', val: 'a', first: '', vol: null, title: '' }) < 0,
         'Dewey before string in mixed sections');
 
-      // Same Dewey cutter = tied, regardless of title (cutter shared by many authors).
+      // Same Dewey number+cutter → shelved by title when both titles are known.
       let kdt1 = { kind: 'dewey', val: { num: 635, cut: 'gar', prefix: '635' }, vol: null, title: 'ground rules' };
       let kdt2 = { kind: 'dewey', val: { num: 635, cut: 'gar', prefix: '635' }, vol: null, title: 'garden friends' };
-      eq(compareKeys(kdt1, kdt2), 0, 'Same Dewey cutter tied despite different titles');
+      assert(compareKeys(kdt2, kdt1) < 0, 'Same Dewey cutter ordered by title (garden < ground)');
+      // …but tied when a title is missing — can't place a book we couldn't fully read.
+      let kdt3 = { kind: 'dewey', val: { num: 635, cut: 'gar', prefix: '635' }, vol: null, title: null };
+      eq(compareKeys(kdt1, kdt3), 0, 'Same Dewey cutter tied when one title unknown');
       console.groupEnd();
 
       // ── checkOrder with simple shelf ──
@@ -2526,19 +2530,38 @@ Example of unreadable or cropped sticker: [null, "The Stand", 0, [420,190,980,27
       assert(edgeResult.length === 3, 'Edge-cropped book still counted (not dropped)');
       console.groupEnd();
 
-      // ── Duplicate Dewey cutter never flagged on title order ──
-      console.group('checkOrder (same Dewey cutter, mixed title order)');
-      const dupDeweyBooks = [
+      // ── Same Dewey cutter is now ordered by title ──
+      console.group('checkOrder (same Dewey cutter, title tiebreak)');
+      // GAR run in correct title order (garden friends < garden wisdom < ground
+      // rules < vegetable…) → nothing flagged.
+      const dupDeweyOrdered = [
         { spine_label: '635 GAL', title: 'Striking Succulent Garden',     confidence: 'high', bounding_box: [100, 0,   900, 100] },
-        { spine_label: '635 GAR', title: 'Ground Rules',                  confidence: 'high', bounding_box: [100, 100, 900, 200] },
-        { spine_label: '635 GAR', title: 'Vegetable Gardening Made Easy', confidence: 'high', bounding_box: [100, 200, 900, 300] },
-        { spine_label: '635 GAR', title: 'Garden Friends',               confidence: 'high', bounding_box: [100, 300, 900, 400] },
-        { spine_label: '635 GAR', title: 'Garden Wisdom & Know-How',     confidence: 'high', bounding_box: [100, 400, 900, 500] },
+        { spine_label: '635 GAR', title: 'Garden Friends',               confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { spine_label: '635 GAR', title: 'Garden Wisdom & Know-How',     confidence: 'high', bounding_box: [100, 200, 900, 300] },
+        { spine_label: '635 GAR', title: 'Ground Rules',                  confidence: 'high', bounding_box: [100, 300, 900, 400] },
+        { spine_label: '635 GAR', title: 'Vegetable Gardening Made Easy', confidence: 'high', bounding_box: [100, 400, 900, 500] },
         { spine_label: '635 GET', title: 'The Heirloom Life Gardener',   confidence: 'high', bounding_box: [100, 500, 900, 600] },
       ];
-      const dupDeweyResult = checkOrder(dupDeweyBooks, 'nonfiction');
-      assert(dupDeweyResult.every(b => !b.outOfOrder),
-        'GAL ≤ GAR ×4 (any title order) ≤ GET → nothing flagged out of order');
+      assert(checkOrder(dupDeweyOrdered, 'nonfiction').every(b => !b.outOfOrder),
+        'GAL ≤ GAR ×4 in title order ≤ GET → nothing flagged');
+
+      // Same cutter, one book out of title order → flagged.
+      const dupDeweyMisordered = [
+        { spine_label: '635 GAR', title: 'Vegetable Gardening Made Easy', confidence: 'high', bounding_box: [100, 0,   900, 100] },
+        { spine_label: '635 GAR', title: 'Garden Friends',               confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { spine_label: '635 GAR', title: 'Ground Rules',                  confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      assert(checkOrder(dupDeweyMisordered, 'nonfiction').some(b => b.outOfOrder),
+        'GAR run out of title order → at least one flagged');
+
+      // A missing title inside the run can't be placed → no title-order flag.
+      const dupDeweyNullTitle = [
+        { spine_label: '635 GAR', title: 'Apple',  confidence: 'high', bounding_box: [100, 0,   900, 100] },
+        { spine_label: '635 GAR', title: null,     confidence: 'high', bounding_box: [100, 100, 900, 200] },
+        { spine_label: '635 GAR', title: 'Banana', confidence: 'high', bounding_box: [100, 200, 900, 300] },
+      ];
+      assert(checkOrder(dupDeweyNullTitle, 'nonfiction').every(b => !b.outOfOrder),
+        'GAR run with an unknown title → no title-order flag');
       console.groupEnd();
 
       // ── Letter-only Dewey labels (biography section) are actually checked ──
