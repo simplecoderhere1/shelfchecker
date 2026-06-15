@@ -1,6 +1,6 @@
 # ShelfCheck
 
-A web app for Champaign Public Library volunteers to find misshelved books.
+A web app for Library volunteers to find misshelved books.
 
 Take a photo of a shelf → the app reads the white spine labels with Gemini AI → red boxes mark books that are out of order, yellow boxes mark labels that couldn't be read clearly.
 
